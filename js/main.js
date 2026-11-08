@@ -94,13 +94,12 @@ function renderHub() {
     const info = E.MANIFEST[peek];
     const meta = `${prettyKey(info.key)} · ${info.bpm} BPM`;
     let html;
+    // Short lines keep the text in the wide middle of the hub, clear of its curved edge.
     if (s.song === peek && isQueued(ui.layer)) {
-      // Short lines, so the text stays in the wide middle of the hub instead of running into its
-      // curved edge lower down: the status shares the key and tempo line, the hint gets its own.
       html = `${meta}<br><b>${s.loading ? 'Loading…' : 'Drops on release'}</b><span class="hub-hint"><br>pick again to take back</span>`;
     } else if (s.song === peek) {
       const now = s.loading ? 'Loading…' : state.playing ? 'Playing' : 'Selected';
-      // (on small wheels, where the hint is hidden, the status keeps a line of its own instead)
+      // big wheels: status on the key line, hint below; small ones: status on its own line, no hint
       html = `${meta}<span class="hub-wide"> · </span><br class="hub-narrow"><b>${now}</b><span class="hub-hint"><br>pick again to remove</span>`;
     } else {
       const part = info.parts && info.parts[E.stemTypeFor(ui.layer, peek)];
@@ -339,7 +338,7 @@ function render() {
     disabled: (song) => !E.stemTypeFor(ui.layer, song),
     active: (song) => cur.song === song,
     loading: (song) => cur.song === song && (cur.loading || isQueued(ui.layer)), // queued ones pulse too
-    // the other layers using a song (the current one's is its highlighted segment already)
+    // the other layers using a song (the current layer's is already the highlighted segment)
     usedBy: (song) => LAYERS.map((l) => l.id).filter((id) => id !== ui.layer && state.layers[id].song === song),
   });
   document.body.style.setProperty('--bpm', state.bpm);

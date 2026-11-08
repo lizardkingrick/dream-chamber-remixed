@@ -3,8 +3,7 @@
 
 const NS = 'http://www.w3.org/2000/svg';
 const C = 300, R_OUT = 292, R_IN = 160, HALF_GAP = 4, CORNER = 12, FONT = 23;
-// The other layers using a song: small dots in their colours, side by side in a row under the
-// song's name. The name is fitted with the row's room, so the two never touch.
+// Dots under a song's name for the other layers using it; names are fitted with room for the row.
 const DOT_R = 4.8, DOT_GAP = 14.4, DOT_ROW = 15;
 
 const el = (tag, attrs = {}) => {
@@ -124,7 +123,7 @@ export function createWheel(svg, { onPick, onFocusChange }) {
       const [x, y] = pt(rm, mid);
       const text = el('text', { x, y, class: 'seg-label', 'font-size': fs });
       const lh = fs * 1.12;
-      const ty = y - DOT_ROW / 2; // the name's centre: the name and the dot row are centred together
+      const ty = y - DOT_ROW / 2; // centre the name and the dot row together
       lines.forEach((ln, k) => {
         const t = el('tspan', { x, y: ty + (k - (lines.length - 1) / 2) * lh + fs * 0.35 });
         t.textContent = ln;
@@ -132,7 +131,7 @@ export function createWheel(svg, { onPick, onFocusChange }) {
       });
       g.append(text);
 
-      // Which other layers already use this song (dots under the name, drawn in update).
+      // Which other layers already use this song (drawn in update).
       const dots = el('g', { class: 'seg-dots' });
       g.append(dots);
       layer.append(g);

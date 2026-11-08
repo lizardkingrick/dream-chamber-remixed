@@ -363,7 +363,7 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
 .seg.disabled.focus .seg-shape { fill: #0e1858; stroke: #0e1858; opacity: 0.85; }
 .seg.loading .seg-shape { animation: segpulse 0.7s ease-in-out infinite alternate; }
 @keyframes segpulse { to { fill: #5fb9ff; stroke: #5fb9ff; } }
-/* the other layers using a song: small dots in their colours, in a row under its name */
+/* the other layers using a song: dots in their colours under its name */
 .seg-dot { pointer-events: none; }
 .seg-dot-groove { fill: var(--groove); }
 .seg-dot-lead { fill: var(--lead); }
@@ -422,14 +422,14 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
 .hub-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; width: 76%; margin-top: 1.6cqw; margin-bottom: 9.4cqw; pointer-events: none; }
 .hub-title { font: 400 7cqw/1 var(--display); text-transform: uppercase; letter-spacing: 0.02em; text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5); max-width: 100%; }
 .hub-sub { font: 600 max(10px, 2.5cqw)/1.25 var(--ui); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-top: 0.8cqw; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hub.peek .hub-title { font-size: 4.6cqw; line-height: 1.05; text-transform: none; font-family: var(--ui); font-weight: 800; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.hub.peek .hub-title { font-size: 4.3cqw; line-height: 1.05; text-transform: none; font-family: var(--ui); font-weight: 800; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 /* Showing a song, the hub can need four lines (a long name, its key and tempo, "pick again to
    remove"): the space-bar badge steps aside and the body takes its slot too (21.1–45.6). */
 .hub.peek .hub-body { margin-bottom: 4.4cqw; }
 .hub.peek .hub-kc { opacity: 0; }
-.hub.peek .hub-sub { white-space: normal; margin-top: 1.4cqw; }
+.hub.peek .hub-sub { font-size: max(10px, 2.3cqw); line-height: 1.2; white-space: normal; margin-top: 1.4cqw; }
 .hub.peek .hub-sub b { color: var(--hc); }
-/* small wheels (phones): the hub has room for "Playing" but not the hint after it */
+/* small wheels (phones): no room for the hint, so the status takes its own line instead */
 .hub-narrow { display: none; }
 @container (max-width: 480px) { .hub-hint, .hub-wide { display: none; } .hub-narrow { display: inline; } }
 .hub-kc { position: absolute; bottom: 4.4cqw; min-width: 9cqw; height: 4.8cqw; padding: 0; font-size: 2.4cqw; border-radius: 1cqw; }
@@ -586,9 +586,6 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .master-vol input { width: calc(64 * var(--u)); }
   /* The wheel takes whatever height the rest leaves (after the notch and home bar too), so the page
      fits the screen exactly; only on the very shortest does it stop shrinking and let the page scroll. */
-  /* The wheel takes all the height the rest leaves, so the album bar sits right on top of the
-     layers with no gap; only on the very shortest phones does the wheel stop shrinking and let
-     the page scroll. */
   .right { display: contents; }
   .wheel-box { order: 2; display: flex; justify-content: center; align-items: center; width: 100%; flex: 1 0 calc(165 * var(--u)); min-height: 0; container-type: size; }
   .wheel-wrap { width: min(100cqw, calc(540 * var(--u)), 100cqh); }
@@ -695,42 +692,44 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .topbar { grid-column: 1; grid-row: 1; }
   .brand, .clock, .master-vol { display: none; }
   .transport { width: 100%; justify-content: space-between; gap: calc(6 * var(--u)); }
-  .tbtn, .tbtn-play { width: calc(42 * var(--u)); height: calc(42 * var(--u)); padding: 0; justify-content: center; }
+  .tbtn, .tbtn-play { width: calc(40 * var(--u)); height: calc(40 * var(--u)); padding: 0; justify-content: center; }
   .tbtn .tlabel, .tbtn-play .tlabel { display: none; }
   .tbtn svg { width: calc(20 * var(--u)); height: calc(20 * var(--u)); }
 
   /* Never a scrolling panel: everything is sized to fit the height, and the layer cards give way
      on the very shortest screens (a phone with the browser's bars showing). */
   .left { grid-row: 2; overflow: hidden; justify-content: flex-start; gap: calc(8 * var(--u)); }
-  /* the layer cards share whatever height is left, so their bottom lines up with the wheel and the
-     album rail with no gap under them (in the browser as well as from the home screen) */
+  /* the layer cards share the height that's left, so they end level with the wheel and album rail */
   .layers { flex: 1 1 auto; min-height: 0; }
   .layer { flex: 1 1 0; min-height: 0; align-content: center; }
   .jam-btn, .ctl-label, .ctl-sub, .fx-hint, .album-name { display: none; }
 
-  /* tempo and key split the panel's width */
+  /* tempo and key split the panel's width; every row in the panel is 40 units tall */
   .controls { gap: calc(8 * var(--u)); }
   .ctl { flex: 1; align-items: stretch; }
-  .pill { height: calc(36 * var(--u)); justify-content: space-between; border-radius: calc(10 * var(--u)); }
+  .pill { height: calc(40 * var(--u)); justify-content: space-between; border-radius: calc(10 * var(--u)); }
   .pill button { width: calc(32 * var(--u)); height: calc(32 * var(--u)); }
   .pill button .kc { min-width: calc(24 * var(--u)); height: calc(24 * var(--u)); font-size: calc(16 * var(--u)); }
   .tempo output { min-width: 0; font-size: calc(24 * var(--u)); }
   .key select { flex: 1; min-width: 0; font-size: calc(19 * var(--u)); }
   .lock svg { width: calc(18 * var(--u)); height: calc(18 * var(--u)); }
 
-  /* the effects (icons only) and the round FX hold button share one row */
-  .fx { flex-direction: row; align-items: center; gap: calc(8 * var(--u)); }
+  /* the effects (icons only), then the tune and FX buttons, in the same columns as the last two
+     transport buttons (which sit 50 units apart) */
+  .fx { flex-direction: row; align-items: center; gap: calc(10 * var(--u)); }
   .fx-row { flex: 1; min-width: 0; padding-left: 0; }
-  .fx-btn, .fx-tune-btn { order: 1; padding: 0; } /* after the effects: the tune button, then FX */
-  .fx-btn .kc-lg { width: calc(38 * var(--u)); height: calc(38 * var(--u)); }
+  .fx-picker { height: calc(40 * var(--u)); padding: calc(3 * var(--u)); align-items: stretch; }
+  .fx-btn, .fx-tune-btn { order: 1; flex: none; padding: 0; }
+  .fx-tune-btn { width: calc(40 * var(--u)); height: calc(40 * var(--u)); border-radius: 50%; }
+  .fx-btn .kc-lg { width: calc(40 * var(--u)); height: calc(40 * var(--u)); min-width: 0; }
   .fx-text, .fx-name, .fx-chip span { display: none; }
-  .fx-chip { padding: calc(6 * var(--u)) 2px; }
+  .fx-chip { padding: 0 2px; justify-content: center; }
 
-  /* compact layer cards */
-  .layers { gap: calc(6 * var(--u)); }
+  /* compact layer cards; their mute and remove buttons line up with the tune and FX buttons */
+  .layers { gap: calc(8 * var(--u)); }
   .layer {
     grid-template-columns: calc(40 * var(--u)) minmax(0, 1fr) auto; grid-template-areas: "icon text actions" "icon vol actions";
-    gap: calc(2 * var(--u)) calc(10 * var(--u)); padding: calc(5 * var(--u)) calc(8 * var(--u)) calc(5 * var(--u)) calc(5 * var(--u));
+    gap: calc(2 * var(--u)) calc(10 * var(--u)); padding: calc(6 * var(--u)) calc(4 * var(--u)) calc(6 * var(--u)) calc(6 * var(--u));
   }
   .layer-icon { grid-area: icon; }
   .layer-text { grid-area: text; align-self: end; }
@@ -741,8 +740,8 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .layer-song { font-size: calc(18 * var(--u)); }
   .layer-sub { font-size: max(10.5px, calc(12.5 * var(--u))); }
   .layer-badge { display: none; } /* the line under the song names the album; the name needs the room */
-  .layer-actions { gap: calc(10 * var(--u)); }
-  .ibtn { width: calc(34 * var(--u)); height: calc(34 * var(--u)); }
+  .layer-actions { gap: calc(18 * var(--u)); }
+  .ibtn { width: calc(32 * var(--u)); height: calc(32 * var(--u)); }
   /* the volume is its own line under the song, so it can't cover the name or the buttons */
   .layer-vol { position: relative !important; inset: auto; grid-area: vol; width: 100%; height: calc(12 * var(--u)); }
   /* a slimmer knob than elsewhere: the cards give up height on short screens, and a full-size
@@ -753,8 +752,8 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .layer.empty .layer-text { align-self: center; }
   .layer.empty { grid-template-areas: "icon text actions"; }
 
-  /* the wheel as tall as the screen, the albums in a rail beside it */
-  /* the wheel and the album rail sit against the right edge; the stage shows in the gap */
+  /* the wheel as tall as the screen and the album rail beside it, against the right edge; the
+     stage shows in the gap */
   .right { grid-column: 2; grid-row: 1 / -1; flex-direction: row; justify-content: flex-end; gap: calc(10 * var(--u)); }
   .wheel-wrap {
     width: min(calc(100dvh - max(calc(8 * var(--u)), env(safe-area-inset-top)) - max(calc(8 * var(--u)), env(safe-area-inset-bottom))), calc(100% - 72 * var(--u)));
@@ -819,35 +818,8 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .hub-ring .beat-halo { display: none; }
 }
 
-/* ---------- phones on their side: one grid ----------
-   Every control on a row is the same height (40 units) and the gaps are even, so edges line up
-   across the rows. */
-@media (orientation: landscape) and (max-height: 540px) {
-  .left { gap: calc(8 * var(--u)); }
-  .layers { gap: calc(8 * var(--u)); }
-  /* transport, tempo/key and the effects row: all 40 units tall, flush left and right */
-  .tbtn, .tbtn-play { width: calc(40 * var(--u)); height: calc(40 * var(--u)); }
-  .pill { height: calc(40 * var(--u)); }
-  .fx-picker { height: calc(40 * var(--u)); padding: calc(3 * var(--u)); align-items: stretch; }
-  .fx-chip { padding: 0 2px; justify-content: center; }
-  .fx-tune-btn { width: calc(40 * var(--u)); height: calc(40 * var(--u)); border-radius: 50%; }
-  .fx-btn { flex: none; }
-  .fx-btn .kc-lg { width: calc(40 * var(--u)); height: calc(40 * var(--u)); min-width: 0; }
-  /* layer cards: the icon and buttons centred on the card (a little less inset on the right, so
-     the round buttons land in the button columns below) */
-  .layer { padding: calc(6 * var(--u)) calc(4 * var(--u)) calc(6 * var(--u)) calc(6 * var(--u)); column-gap: calc(10 * var(--u)); }
-  /* The transport buttons sit 50 units apart; the settings and FX buttons, and each card's mute
-     and remove buttons, sit in the same columns as the last two of them. */
-  .fx { gap: calc(10 * var(--u)); }
-  .layer-actions { gap: calc(18 * var(--u)); }
-  .layer .ibtn { width: calc(32 * var(--u)); height: calc(32 * var(--u)); }
-}
-
-/* ---------- desktop: two columns on one grid ----------
-   Both columns start the same distance under the top bar and end on the same bottom line: the
-   wheel is sized to fill its column exactly (top bar, album bar and its caption taken off), and
-   the album bar is as wide as the wheel. On the left, tempo and key fill the width like every
-   card under them, and the top bar's controls are all one height. */
+/* Desktop (layout 1): the wheel fills its column, the album bar is as wide as it, and the left
+   column ends level with the album bar. Tempo and key fill the panel; the top bar is one height. */
 @media (orientation: landscape) and (min-width: 700px) and (min-height: 541px) {
   .app { row-gap: calc(16 * var(--u)); }
   .clock { height: calc(40 * var(--u)); padding-block: 0; }
@@ -855,16 +827,9 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .wheel-wrap { width: min(calc(100dvh - 228 * var(--u)), calc(100vw - 700 * var(--u)), 52vw); }
   .albums { width: 100%; }
   .album-strip { flex: 1; min-width: 0; justify-content: safe center; }
-  /* the left column ends level with the album bar (the album's name hangs under the bar: its line
-     is 18 units tall, 10 under the bar) */
-  .left { padding-bottom: calc(28 * var(--u)); }
+  .left { padding-bottom: calc(28 * var(--u)); } /* the album name's line (18) and its gap (10) */
   .controls { gap: calc(12 * var(--u)); }
   .ctl { flex: 1 1 0; min-width: 0; align-items: stretch; text-align: center; }
   .pill { justify-content: space-between; }
   .key select { flex: 1; min-width: 0; }
 }
-
-/* Showing a song, the hub's text runs to four or five lines and the lowest sits where the circle
-   narrows: a touch smaller type keeps every line clear of the bar ring. */
-.hub.peek .hub-title { font-size: 4.3cqw; }
-.hub.peek .hub-sub { font-size: max(10px, 2.3cqw); line-height: 1.2; }
