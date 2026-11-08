@@ -818,15 +818,12 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .hub-ring .beat-halo { display: none; }
 }
 
-/* Desktop (layout 1): the wheel fills its column, the album bar is as wide as it, and the left
-   column ends level with the album bar. Tempo and key fill the panel; the top bar is one height. */
+/* Desktop (layout 1): the wheel and album bar sit at the foot of their column, so the left column
+   can end level with the album bar. Tempo and key fill the panel; the top bar is one height. */
 @media (orientation: landscape) and (min-width: 700px) and (min-height: 541px) {
   .app { row-gap: calc(16 * var(--u)); }
   .clock { height: calc(40 * var(--u)); padding-block: 0; }
   .right { justify-content: flex-end; }
-  .wheel-wrap { width: min(calc(100dvh - 228 * var(--u)), calc(100vw - 700 * var(--u)), 52vw); }
-  .albums { width: 100%; }
-  .album-strip { flex: 1; min-width: 0; justify-content: safe center; }
   .left { padding-bottom: calc(28 * var(--u)); } /* the album name's line (18) and its gap (10) */
   .controls { gap: calc(12 * var(--u)); }
   .ctl { flex: 1 1 0; min-width: 0; align-items: stretch; text-align: center; }
