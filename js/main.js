@@ -95,10 +95,13 @@ function renderHub() {
     const meta = `${prettyKey(info.key)} · ${info.bpm} BPM`;
     let html;
     if (s.song === peek && isQueued(ui.layer)) {
-      html = `${meta}<br><b>${s.loading ? 'Loading…' : 'Drops when you let go'}</b><span class="hub-hint"> · pick again to take back</span>`;
+      // Short lines, so the text stays in the wide middle of the hub instead of running into its
+      // curved edge lower down: the status shares the key and tempo line, the hint gets its own.
+      html = `${meta}<br><b>${s.loading ? 'Loading…' : 'Drops on release'}</b><span class="hub-hint"><br>pick again to take back</span>`;
     } else if (s.song === peek) {
       const now = s.loading ? 'Loading…' : state.playing ? 'Playing' : 'Selected';
-      html = `${meta}<br><b>${now}</b><span class="hub-hint"> · pick again to remove</span>`;
+      // (on small wheels, where the hint is hidden, the status keeps a line of its own instead)
+      html = `${meta}<span class="hub-wide"> · </span><br class="hub-narrow"><b>${now}</b><span class="hub-hint"><br>pick again to remove</span>`;
     } else {
       const part = info.parts && info.parts[E.stemTypeFor(ui.layer, peek)];
       html = `${meta}<br>Add ${part ? `the ${part} ` : ''}as <b>${def.label}</b>`;
@@ -336,7 +339,8 @@ function render() {
     disabled: (song) => !E.stemTypeFor(ui.layer, song),
     active: (song) => cur.song === song,
     loading: (song) => cur.song === song && (cur.loading || isQueued(ui.layer)), // queued ones pulse too
-    usedBy: (song) => LAYERS.map((l) => l.id).filter((id) => state.layers[id].song === song),
+    // the other layers using a song (the current one's is its highlighted segment already)
+    usedBy: (song) => LAYERS.map((l) => l.id).filter((id) => id !== ui.layer && state.layers[id].song === song),
   });
   document.body.style.setProperty('--bpm', state.bpm);
   scheduleHash();

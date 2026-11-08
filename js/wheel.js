@@ -3,6 +3,9 @@
 
 const NS = 'http://www.w3.org/2000/svg';
 const C = 300, R_OUT = 292, R_IN = 160, HALF_GAP = 4, CORNER = 12, FONT = 23;
+// The other layers using a song: small dots in their colours, side by side in a row under the
+// song's name. The name is fitted with the row's room, so the two never touch.
+const DOT_R = 4.8, DOT_GAP = 14.4, DOT_ROW = 15;
 
 const el = (tag, attrs = {}) => {
   const n = document.createElementNS(NS, tag);
@@ -31,7 +34,7 @@ function segmentPath(i, n) {
 function fitLabel(label, mid, half, rm) {
   const [cx, cy] = pt(rm, mid);
   const fits = (fs, lines) => {
-    const bw = Math.max(...lines.map((l) => l.length)) * fs * 0.5, bh = lines.length * fs * 1.12;
+    const bw = Math.max(...lines.map((l) => l.length)) * fs * 0.5, bh = lines.length * fs * 1.12 + DOT_ROW;
     for (const [x, y] of [[cx - bw / 2, cy - bh / 2], [cx + bw / 2, cy - bh / 2], [cx - bw / 2, cy + bh / 2], [cx + bw / 2, cy + bh / 2]]) {
       const r = Math.hypot(x - C, y - C);
       if (r > R_OUT - 14 || r < R_IN + 12) return false;
@@ -121,20 +124,17 @@ export function createWheel(svg, { onPick, onFocusChange }) {
       const [x, y] = pt(rm, mid);
       const text = el('text', { x, y, class: 'seg-label', 'font-size': fs });
       const lh = fs * 1.12;
+      const ty = y - DOT_ROW / 2; // the name's centre: the name and the dot row are centred together
       lines.forEach((ln, k) => {
-        const t = el('tspan', { x, y: y + (k - (lines.length - 1) / 2) * lh + fs * 0.35 });
+        const t = el('tspan', { x, y: ty + (k - (lines.length - 1) / 2) * lh + fs * 0.35 });
         t.textContent = ln;
         text.append(t);
       });
       g.append(text);
 
-      // Which layers already use this song (small coloured pips at the rim).
-      const pips = el('g', { class: 'pips' });
-      ['groove', 'lead', 'texture'].forEach((id, k) => {
-        const [px, py] = pt(R_OUT - 18, mid + (k - 1) * (7.5 / (R_OUT - 18)) * 180 / Math.PI);
-        pips.append(el('circle', { cx: px, cy: py, r: 4.5, class: `pip pip-${id}` }));
-      });
-      g.append(pips);
+      // Which other layers already use this song (dots under the name, drawn in update).
+      const dots = el('g', { class: 'seg-dots' });
+      g.append(dots);
       layer.append(g);
 
       // Sticky: the highlight stays on the last song pointed at.
@@ -148,7 +148,7 @@ export function createWheel(svg, { onPick, onFocusChange }) {
         // mouse may have moved away from the focused one.
         if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (!e.repeat) onPick(items[focus] ? items[focus].song : song); }
       });
-      return { song, label, g };
+      return { song, label, g, dots, dotX: x, dotY: ty + (lines.length * lh) / 2 + DOT_ROW - DOT_R - 1 };
     });
     onFocusChange(null);
     if (hadFocus && items.length) setFocus(0, { focusDom: true });
@@ -168,7 +168,13 @@ export function createWheel(svg, { onPick, onFocusChange }) {
         : view.active(it.song) ? `${it.label} — playing as ${view.layerLabel}, activate to remove`
         : `${it.label} — add as ${view.layerLabel}`);
       const used = view.usedBy(it.song);
-      it.g.querySelectorAll('.pip').forEach((p) => p.classList.toggle('on', used.some((id) => p.classList.contains(`pip-${id}`))));
+      const key = used.join();
+      if (it.dotKey !== key) {
+        it.dotKey = key;
+        it.dots.replaceChildren(...used.map((id, k) => el('circle', {
+          cx: it.dotX + (k - (used.length - 1) / 2) * DOT_GAP, cy: it.dotY, r: DOT_R, class: `seg-dot seg-dot-${id}`,
+        })));
+      }
     }
   }
 
