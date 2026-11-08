@@ -565,17 +565,9 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
    layers sit side by side under the albums, and tempo, key and the Audio FX button share a row
    with the effects underneath, in reach of the thumbs. */
 @media (max-width: 699px) and (orientation: portrait), (max-width: 699px) and (min-height: 541px) {
-  /* The layout is 400 units wide and about 830 tall. The unit comes from whichever runs out first,
-     so in a browser (whose bars take some of the height) the whole page shrinks evenly and keeps
-     the same spacing as from the home screen, instead of the wheel squeezing up against the albums. */
-  :root {
-    --uw: clamp(0.8px, 100vw / 400, 1.1px);
-    --u: min(var(--uw), max(0.8px, (100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom)) / 830));
-  }
+  :root { --u: clamp(0.8px, 100vw / 400, 1.1px); }
   #stage { opacity: 0.75; }
   .app {
-    /* full width when the width sets the unit; narrower by the same share when the height does */
-    width: 100%; max-width: calc(100vw - (var(--uw) - var(--u)) * 400); margin: 0 auto;
     gap: calc(12 * var(--u));
     padding: max(calc(10 * var(--u)), env(safe-area-inset-top)) max(calc(16 * var(--u)), env(safe-area-inset-right))
       max(calc(16 * var(--u)), env(safe-area-inset-bottom)) max(calc(16 * var(--u)), env(safe-area-inset-left));
@@ -663,10 +655,10 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .help { padding: calc(20 * var(--u)); }
 }
 
-/* 3b. Very short phones held upright (the unit has stopped shrinking with the height): the
+/* 3b. Shorter phones held upright (most phones once the browser's bars take their share): the
    title folds down to the logo at the head of the button row, the gaps close up and the album
    covers shrink, so the wheel keeps its size. */
-@media (max-width: 699px) and (orientation: portrait) and (max-height: 660px) {
+@media (max-width: 699px) and (orientation: portrait) and (max-height: 800px) {
   .app { gap: calc(8 * var(--u)); }
   .left { row-gap: calc(8 * var(--u)); }
   .albums { padding: calc(6 * var(--u)); }
@@ -677,7 +669,7 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
 }
 /* The shortest (an iPhone SE in Safari, older Androids): the effects show icons only and the layer
    tiles drop their second line. */
-@media (max-width: 699px) and (orientation: portrait) and (max-height: 560px) {
+@media (max-width: 699px) and (orientation: portrait) and (max-height: 620px) {
   .fx-chip span, .layer-sub { display: none; }
   .fx-chip { padding: calc(6 * var(--u)) 2px; }
 }
@@ -827,26 +819,9 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .hub-ring .beat-halo { display: none; }
 }
 
-/* ---------- phones: one grid for everything ----------
-   Every control on a row is the same height (40 units), every card insets its contents by the
-   same amount, and the gaps come in two steps only: 12 between groups, 6 inside a group (8 on
-   the side, where the panel is tighter). Edges then line up across rows, from the home screen and
-   in the browser alike. */
-@media (max-width: 699px) and (orientation: portrait), (max-width: 699px) and (min-height: 541px) {
-  .left { row-gap: calc(12 * var(--u)); }
-  .layers { gap: calc(6 * var(--u)); }
-  /* tempo, key, settings and FX: the same 40-unit row as the transport buttons */
-  .pill { height: calc(40 * var(--u)); }
-  .fx-tune-btn, .fx-btn .kc-lg { width: calc(40 * var(--u)); height: calc(40 * var(--u)); }
-  /* layer rows: the icon and the buttons the same size, an even inset all round, 40 units tall */
-  .layer { padding: calc(4 * var(--u)); gap: calc(8 * var(--u)); min-height: calc(40 * var(--u)); }
-  .layer-icon, .layer .ibtn { width: calc(32 * var(--u)); height: calc(32 * var(--u)); }
-  .layer-icon { border-radius: calc(10 * var(--u)); }
-  .layer.empty .layer-song { padding-right: calc(4 * var(--u)); }
-  /* each row's mute and remove buttons sit in the same columns as the settings and FX buttons
-     (and the last two transport buttons) above and below them */
-  .layer .ibtn-mute { margin-right: calc(8 * var(--u)); }
-}
+/* ---------- phones on their side: one grid ----------
+   Every control on a row is the same height (40 units) and the gaps are even, so edges line up
+   across the rows. */
 @media (orientation: landscape) and (max-height: 540px) {
   .left { gap: calc(8 * var(--u)); }
   .layers { gap: calc(8 * var(--u)); }
