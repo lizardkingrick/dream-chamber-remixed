@@ -320,10 +320,13 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
 .layer.muted .ibtn-mute .i-muted { display: block; }
 .layer.muted .ibtn-mute .i-sound { display: none; }
 .layer-vol { position: absolute !important; left: calc(78 * var(--u)); right: calc(14 * var(--u)); bottom: calc(6 * var(--u)); height: calc(14 * var(--u)); --c: color-mix(in srgb, var(--c) 80%, #fff); }
-.layer-load { position: absolute !important; left: 0; bottom: 0; height: calc(3 * var(--u)); width: calc(var(--p, 0) * 100%); background: var(--c); box-shadow: 0 0 calc(8 * var(--u)) var(--c); transition: width 0.15s; }
-.layer:not(.loading) .layer-load { display: none; }
+.layer-load { position: absolute !important; left: 0; bottom: 0; height: calc(3 * var(--u)); width: calc(var(--p, 0) * 100%); background: var(--c); box-shadow: 0 0 calc(8 * var(--u)) var(--c); transition: width 0.15s; transform-origin: 0 50%; }
+.layer:not(.loading):not(.waiting) .layer-load { display: none; }
 .layer.loading .layer-song { animation: shimmer 0.9s ease-in-out infinite; }
 @keyframes shimmer { 50% { opacity: 0.45; } }
+/* Ready and waiting for its bar line (or the others, the FX release, the new tempo): the name holds
+   still, dimmed, until it's heard; the bar under it drains to the moment it lands (js/main.js). */
+.layer.waiting .layer-song { opacity: 0.55; }
 
 /* ---------- wheel ---------- */
 .wheel-box { display: contents; } /* a box of its own only in the phone layout */
@@ -423,15 +426,20 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
 .hub-title { font: 400 7cqw/1 var(--display); text-transform: uppercase; letter-spacing: 0.02em; text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5); max-width: 100%; }
 .hub-sub { font: 600 max(10px, 2.5cqw)/1.25 var(--ui); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-top: 0.8cqw; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hub.peek .hub-title { font-size: 4.3cqw; line-height: 1.05; text-transform: none; font-family: var(--ui); font-weight: 800; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
-/* Showing a song, the hub can need four lines (a long name, its key and tempo, "pick again to
-   remove"): the space-bar badge steps aside and the body takes its slot too (21.1–45.6). */
+/* Showing a song, the hub can need five lines (a long name, its key and tempo, its status, "pick
+   again to remove"): the space-bar badge steps aside and the body takes its slot too (21.1–45.6). */
 .hub.peek .hub-body { margin-bottom: 4.4cqw; }
 .hub.peek .hub-kc { opacity: 0; }
 .hub.peek .hub-sub { font-size: max(10px, 2.3cqw); line-height: 1.2; white-space: normal; margin-top: 1.4cqw; }
-.hub.peek .hub-sub b { color: var(--hc); }
-/* small wheels (phones): no room for the hint, so the status takes its own line instead */
-.hub-narrow { display: none; }
-@container (max-width: 480px) { .hub-hint, .hub-wide { display: none; } .hub-narrow { display: inline; } }
+.hub-sub b { color: var(--hc); }
+/* A pick's status never wraps: a second line moved the text as the pick went along, and on the
+   smallest hubs was cut in half. Its words are short (see pickWords); a font wider still cuts it short. */
+.hub-status { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+/* the song still heard while a pick is on its way: one line, where only a long name is cut short */
+.hub-line { display: inline-flex; max-width: 100%; white-space: nowrap; vertical-align: bottom; }
+.hub-old { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* small wheels (phones): no room for the hint */
+@container (max-width: 480px) { .hub-hint { display: none; } }
 .hub-kc { position: absolute; bottom: 4.4cqw; min-width: 9cqw; height: 4.8cqw; padding: 0; font-size: 2.4cqw; border-radius: 1cqw; }
 .hub-kc svg { width: 7.5cqw; height: 4.5cqw; } /* a wide key, like the space bar it stands for */
 .hub-kc::before { display: none; }
@@ -595,7 +603,7 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .album-name, .jam-btn, .ctl-label, .ctl-sub, .fx-hint { display: none; }
 
   .left {
-    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+    display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto auto; /* tempo holds a button more than key */
     grid-template-areas: "layers layers layers layers" "tempo key tune fx" "chips chips chips chips";
     align-items: center; gap: calc(10 * var(--u)) calc(8 * var(--u));
     width: min(100%, calc(540 * var(--u)));
@@ -608,6 +616,8 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .pill { height: calc(38 * var(--u)); justify-content: space-between; border-radius: calc(10 * var(--u)); }
   .pill button { width: calc(32 * var(--u)); height: calc(32 * var(--u)); }
   .pill button .kc { min-width: calc(24 * var(--u)); height: calc(24 * var(--u)); font-size: calc(16 * var(--u)); }
+  .tempo { gap: calc(2 * var(--u)); padding: 0 calc(4 * var(--u)); }
+  .tempo button { width: max(24px, calc(28 * var(--u))); } /* the lock, minus and plus beside the number; never under a 24 px target */
   .tempo output { min-width: 0; font-size: calc(22 * var(--u)); }
   .key select { flex: 1; min-width: 0; font-size: calc(18 * var(--u)); }
   .lock svg { width: calc(18 * var(--u)); height: calc(18 * var(--u)); }
@@ -642,6 +652,19 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .ibtn-clear { order: 3; }
   .layer-vol { position: relative !important; inset: auto; order: 1; width: 100%; min-width: 0; height: calc(32 * var(--u)); }
   .layer.empty { grid-template-columns: auto minmax(0, 1fr); }
+  /* A pick on its way into a silent layer says where it is ("Downloading 40%", "Joins on the next
+     bar") in the volume's place, the row's height unchanged; the volume is back the moment it's
+     heard. A layer whose old song plays on keeps its volume: its name dims, its thin bar runs, and
+     the hub says where the pick is while that layer is chosen. */
+  .layer.status .layer-text { display: contents; }
+  .layer.status .layer-sub { display: block; font-size: max(10.5px, calc(11 * var(--u))); }
+  .layer.status .layer-vol { display: none; }
+  .layer.muted.status .layer-song, .layer.muted.status .layer-sub { opacity: 0.45; } /* its .layer-text is no box to fade now */
+}
+/* The narrowest phones (320-342 px), where the tempo's buttons stop shrinking at 24 px: the tempo
+   takes a little more of its row from the key, which needs less, so the number keeps its room. */
+@media (max-width: 342px) and (orientation: portrait), (max-width: 342px) and (min-height: 541px) {
+  .left { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) auto auto; }
 }
 @media (max-width: 520px) {
   .master-vol { display: none; }
@@ -707,9 +730,12 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   /* tempo and key split the panel's width; every row in the panel is 40 units tall */
   .controls { gap: calc(8 * var(--u)); }
   .ctl { flex: 1; align-items: stretch; }
+  .ctl:first-child { flex: 1.2; } /* tempo holds a button more than key */
   .pill { height: calc(40 * var(--u)); justify-content: space-between; border-radius: calc(10 * var(--u)); }
   .pill button { width: calc(32 * var(--u)); height: calc(32 * var(--u)); }
   .pill button .kc { min-width: calc(24 * var(--u)); height: calc(24 * var(--u)); font-size: calc(16 * var(--u)); }
+  .tempo { gap: calc(2 * var(--u)); padding: 0 calc(4 * var(--u)); }
+  .tempo button { width: calc(28 * var(--u)); }
   .tempo output { min-width: 0; font-size: calc(24 * var(--u)); }
   .key select { flex: 1; min-width: 0; font-size: calc(19 * var(--u)); }
   .lock svg { width: calc(18 * var(--u)); height: calc(18 * var(--u)); }
@@ -827,6 +853,7 @@ body.jamming .jam-btn { background: transparent; border-color: transparent; }
   .left { padding-bottom: calc(28 * var(--u)); } /* the album name's line (18) and its gap (10) */
   .controls { gap: calc(12 * var(--u)); }
   .ctl { flex: 1 1 0; min-width: 0; align-items: stretch; text-align: center; }
+  .ctl:first-child { flex-grow: 1.15; } /* tempo holds a button more than key */
   .pill { justify-content: space-between; }
   .key select { flex: 1; min-width: 0; }
 }

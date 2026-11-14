@@ -70,8 +70,54 @@ function shiftLabel(song) {
   return semis ? ` ${semis > 0 ? '+' : ''}${semis} st` : '';
 }
 
+// ---------- when a pick is heard ----------
+// A pick downloads, is stretched, then waits for its bar line while the layer's old song plays on;
+// the card, the hub and the wheel say where it is (E.pickStatus), and only call it playing once it
+// is heard. A wait shorter than SHORT_WAIT (a pre-rendered pick, a drop as the FX is let go) isn't
+// shown: the words go straight to what follows, so nothing flickers. One that shows runs to its end.
+const SHORT_WAIT = 0.3;
+const WAITS = new Set(['group', 'fx', 'tempo', 'bar']);
+const shownStage = {}; // layer id -> the stage its card and the hub show
+function pickView(id) {
+  const st = E.pickStatus(id);
+  let stage = st.stage;
+  const timed = stage === 'bar' || stage === 'tempo', showing = shownStage[id] === 'bar' || shownStage[id] === 'tempo';
+  if (timed && !showing && st.at && st.at - E.clockNow() < SHORT_WAIT) stage = 'playing';
+  else if (stage === 'bar' && shownStage[id] === 'tempo') stage = 'tempo'; // the restart it waited for, now on its way
+  shownStage[id] = stage;
+  return { ...st, stage, heard: st.stage === 'playing', busy: stage === 'download' || stage === 'stretch' || WAITS.has(stage) };
+}
+// The words for a pick on its way: a layer card's (about 22 letters), or `short` ones (14 at most)
+// that fit on one line of the smallest hub (78 px on an iPhone SE in Safari), also used by a card
+// too narrow for its own. A download's percentage is the caller's.
+function pickWords(v, short) {
+  switch (v.stage) {
+    case 'download': return short ? 'Loading' : 'Downloading';
+    case 'stretch': return 'Stretching';
+    case 'group': return short ? 'With the rest' : 'Waits for the others';
+    case 'fx': return short ? 'On FX release' : 'Drops on FX release';
+    case 'tempo': return short ? 'At new tempo' : 'Joins at the new tempo';
+    case 'bar': return short ? 'On next bar' : 'Joins on the next bar';
+    case 'error': return 'Silent for now';
+    default: return state.playing ? 'Playing' : 'Selected';
+  }
+}
+// The wait for a bar line drains the card's thin bar to the moment it lands: an animation the
+// browser runs by itself, so no frame callback is needed (the engine's 'change' at the landing moves
+// the card on).
+const calmMotion = matchMedia('(prefers-reduced-motion: reduce)');
+function drainBar(li, v) {
+  const bar = $('.layer-load', li), key = WAITS.has(v.stage) && v.at ? String(v.at) : '';
+  if (bar.dataset.at === key) return;
+  bar.dataset.at = key;
+  if (bar.drain) { bar.drain.cancel(); bar.drain = null; }
+  const left = v.at - E.clockNow();
+  if (!key || left <= 0 || calmMotion.matches || !bar.animate) return;
+  bar.drain = bar.animate([{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }], { duration: left * 1000, fill: 'forwards' });
+}
+
 function renderHub() {
-  const hub = $('#hub'), def = layerDef(ui.layer), s = state.layers[ui.layer];
+  const hub = $('#hub'), def = layerDef(ui.layer), s = state.layers[ui.layer], v = pickView(ui.layer);
   // An empty slot (no stem for this layer) shows nothing, so the hub keeps the layer view.
   const peek = ui.peek && E.stemTypeFor(ui.layer, ui.peek) ? ui.peek : null;
   hub.dataset.layer = ui.layer;
@@ -95,22 +141,28 @@ function renderHub() {
     const meta = `${prettyKey(info.key)} · ${info.bpm} BPM`;
     let html;
     // Short lines keep the text in the wide middle of the hub, clear of its curved edge.
-    if (s.song === peek && isQueued(ui.layer)) {
-      html = `${meta}<br><b>${s.loading ? 'Loading…' : 'Drops on release'}</b><span class="hub-hint"><br>pick again to take back</span>`;
-    } else if (s.song === peek) {
-      const now = s.loading ? 'Loading…' : state.playing ? 'Playing' : 'Selected';
-      // big wheels: status on the key line, hint below; small ones: status on its own line, no hint
-      html = `${meta}<span class="hub-wide"> · </span><br class="hub-narrow"><b>${now}</b><span class="hub-hint"><br>pick again to remove</span>`;
+    if (s.song === peek) {
+      // While it's on its way, the hint says what is heard meanwhile (in an FX hold, how to take it back).
+      // One line, where only the song's name is cut short: wrapped, "then" went to a line of its own.
+      const hint = isQueued(ui.layer) ? 'pick again to take back'
+        : v.busy && v.old ? `<span class="hub-line"><span class="hub-old">${escapeHtml(displayName(v.old))}</span>&nbsp;plays till then</span>` : 'pick again to remove';
+      // The status on a line of its own that never wraps (short words, see pickWords), so the hub's
+      // text doesn't move as the pick goes along; big wheels add the hint below.
+      html = `${meta}<br><b class="hub-status">${pickWords(v, true)}${hubPct(v)}</b><span class="hub-hint"><br>${hint}</span>`;
     } else {
-      const part = info.parts && info.parts[E.stemTypeFor(ui.layer, peek)];
-      html = `${meta}<br>Add ${part ? `the ${part} ` : ''}as <b>${def.label}</b>`;
+      html = `${meta}<br>Add as <b>${def.label}</b>`;
     }
     setHub(title, displayName(peek), sub, html);
   } else {
     const name = def.label.toLowerCase();
-    setHub(title, def.label, sub, s.song ? escapeHtml(displayName(s.song)) : `Pick ${/^[aeiou]/.test(name) ? 'an' : 'a'} ${name}`);
+    setHub(title, def.label, sub, s.song ? `${escapeHtml(displayName(s.song))}<br><b class="hub-status">${pickWords(v, true)}${hubPct(v)}</b>` : `Pick ${/^[aeiou]/.test(name) ? 'an' : 'a'} ${name}`);
   }
+  // The download's percentage is kept out of the live region's text (aria-hidden, filled in here), so
+  // a screen reader hears "Loading" once, not every 2%.
+  const pct = sub.querySelector('.hub-pct');
+  if (pct) pct.textContent = ` ${Math.round(v.progress * 100)}%`;
 }
+const hubPct = (v) => (v.stage === 'download' ? '<span class="hub-pct" aria-hidden="true"></span>' : '');
 // The hub is a live region: only touch it when the text changes, or screen readers re-read
 // it on every render (progress ticks, hovers).
 function setHub(title, titleText, sub, subHtml) {
@@ -158,6 +210,13 @@ function setLayer(id, { jumpToAlbum = false } = {}) {
 }
 const cycleLayer = (d = 1) => setLayer(LAYERS[(LAYERS.findIndex((l) => l.id === ui.layer) + d + LAYERS.length) % LAYERS.length].id);
 
+// ---------- volume sliders ----------
+// A slider's position squared is its gain. Straight to gain, the top half of the travel was only
+// 6 dB and nearly all of the fade sat in the last tenth; squared, the top half is 12 dB in steps of
+// 2-3 dB a tenth, and it still reaches silence at the bottom with no floor to patch (a straight
+// line in dB needs one). The engine, the export and share links keep working in gain.
+const gainOf = (pos) => pos * pos, posOf = (gain) => Math.sqrt(gain);
+
 // ---------- layer cards ----------
 const ICON_SOUND = `<svg class="i-sound" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
 const ICON_MUTED = `<svg class="i-muted" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="m16 9.5 5 5m0-5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
@@ -175,7 +234,7 @@ function buildLayers() {
         <button class="ibtn ibtn-mute" aria-label="Mute ${l.label}" title="Mute (M)">${ICON_SOUND}${ICON_MUTED}</button>
         <button class="ibtn ibtn-clear" aria-label="Remove ${l.label}" title="Remove (Backspace)">${ICON_CLEAR}</button>
       </span>
-      <input type="range" class="layer-vol" min="0" max="1" step="0.01" value="${state.layers[l.id].volume}" aria-label="${l.label} volume">
+      <input type="range" class="layer-vol" min="0" max="1" step="0.01" value="${posOf(state.layers[l.id].volume).toFixed(2)}" aria-label="${l.label} volume">
       <span class="layer-load"></span>
     </li>`).join('');
   for (const li of list.children) {
@@ -184,7 +243,7 @@ function buildLayers() {
     $('.ibtn-mute', li).onclick = () => { E.ensureCtx(); E.setMuted(id, !state.layers[id].muted); scheduleHash(); };
     $('.ibtn-clear', li).onclick = () => E.clearLayer(id);
     const vol = $('.layer-vol', li);
-    vol.addEventListener('input', () => { E.ensureCtx(); E.setVolume(id, Number(vol.value)); paintRange(vol); scheduleHash(); });
+    vol.addEventListener('input', () => { E.ensureCtx(); E.setVolume(id, gainOf(Number(vol.value))); paintRange(vol); scheduleHash(); });
     paintRange(vol);
   }
 }
@@ -211,41 +270,59 @@ function fitSongName(el) {
   el.style.setProperty('--dur', `${(dist / 32 / 0.75).toFixed(1)}s`); // ~32px/s, a quarter of it paused on the first word
 }
 const fitSongNames = () => document.querySelectorAll('.layer-song').forEach(fitSongName);
-addEventListener('resize', fitSongNames);
+addEventListener('resize', () => { fitSongNames(); renderLayers(); }); // and a status's words to its new width (see fitText)
 document.fonts?.ready.then(fitSongNames);
+
+// The long words, or the short ones where the long would be cut off (a phone 320 px wide has 103 px
+// for "Joins at the new tempo", which needs 115). Measured once set, so it holds for any font.
+function fitText(el, long, short) {
+  el.textContent = long;
+  if (short !== long && el.scrollWidth > el.clientWidth) el.textContent = short;
+}
 
 // Picked during an FX hold and waiting to drop in when it's let go (not one taken back).
 const isQueued = (id) => E.queued(id) && state.layers[id].song !== state.layers[id].heldFrom;
 
 function renderLayers() {
   for (const li of $('#layers').children) {
-    const id = li.dataset.layer, s = state.layers[id], def = layerDef(id);
+    const id = li.dataset.layer, s = state.layers[id], def = layerDef(id), v = pickView(id);
     li.classList.toggle('empty', !s.song);
-    li.classList.toggle('loading', s.loading || s.syncing);
+    li.classList.toggle('loading', v.stage === 'download' || v.stage === 'stretch' || s.syncing);
+    li.classList.toggle('waiting', WAITS.has(v.stage)); // ready: its name dims and the bar drains to the landing
+    // Its line says where it is; on phones held upright in the volume's place, so only while the
+    // layer is silent: with its old song playing on, the volume still has something to turn down.
+    li.classList.toggle('status', (v.busy || v.stage === 'error') && !v.old);
     li.classList.toggle('muted', s.muted);
     li.classList.toggle('current', id === ui.layer);
-    li.classList.toggle('playing', !!s.source && state.playing && !s.muted);
-    li.style.setProperty('--p', s.progress || 0);
+    li.classList.toggle('playing', v.heard && state.playing && !s.muted); // the icon beats only once the pick is heard
+    li.style.setProperty('--p', v.stage === 'download' ? v.progress : 1);
+    drainBar(li, v);
     $('.layer-pick', li).setAttribute('aria-pressed', id === ui.layer);
     $('.ibtn-mute', li).setAttribute('aria-pressed', s.muted);
     const song = $('.layer-song', li), sub = $('.layer-sub', li);
     if (!s.song) {
       setSongName(song, def.label);
       sub.textContent = id === ui.layer ? `Pick a song on the wheel →` : 'Empty';
+      sub.title = '';
       $('.layer-badge', li).dataset.album = '';
       continue;
     }
     const info = E.MANIFEST[s.song];
-    const part = s.type === 'all' ? 'full mix' : info.parts && info.parts[s.type];
-    setSongName(song, displayName(s.song) + (part ? ` (${part})` : ''));
-    sub.textContent = s.loading && s.progress < 1 ? `Loading… ${Math.round((s.progress || 0) * 100)}%`
-      : s.loading || s.syncing ? 'Syncing to tempo…'
-      : isQueued(id) ? 'Drops when you let go of FX'
-      : `${albumById(info.album).name} · ${prettyKey(info.key)}${shiftLabel(s.song)}`;
+    setSongName(song, displayName(s.song) + (s.type === 'all' ? ' (full mix)' : ''));
+    // On its way: where it is (and, as a tooltip, what plays meanwhile); heard or stopped: its album and key.
+    if (v.busy || v.stage === 'error') {
+      const pct = v.stage === 'download' ? ` ${Math.round(v.progress * 100)}%` : '';
+      fitText(sub, pickWords(v) + pct, pickWords(v, true) + pct);
+    } else {
+      sub.textContent = s.syncing ? `Syncing to ${s.bufferBpm !== state.bpm ? 'tempo' : 'key'}…`
+        : `${albumById(info.album).name} · ${prettyKey(info.key)}${shiftLabel(s.song)}`;
+    }
+    sub.title = v.busy && v.old ? `${displayName(v.old)} plays till then` : '';
     const badge = $('.layer-badge', li);
     if (badge.dataset.album !== info.album) { badge.dataset.album = info.album; badge.innerHTML = albumArtUnique(info.album); }
     const vol = $('.layer-vol', li);
-    if (Number(vol.value) !== s.volume) { vol.value = s.volume; paintRange(vol); }
+    // Only when it's off by more than the slider's own step: the default gain (0.85) sits between two steps.
+    if (Math.abs(Number(vol.value) - posOf(s.volume)) > 0.0051) { vol.value = posOf(s.volume); paintRange(vol); }
   }
 }
 
@@ -278,6 +355,12 @@ function buildControls() {
     wheelAcc = 0;
   }, { passive: false });
 
+  // The tempo lock is auto tempo switched off, kept on this device (a share link's tempo still
+  // stands on load: its picks keep it either way). Set straight on the state, as the lock locks
+  // the tempo shown and none has been chosen yet: the first pick still brings its own (see autoBpm).
+  try { if (localStorage.getItem(AUTO_TEMPO_SAVE) === '0') state.autoTempo = false; } catch (_) { /* private mode */ }
+  $('#tempoLockBtn').onclick = toggleTempoLock;
+
   const sel = $('#masterKey');
   // Key lock matches minor keys (a major key counts as its relative minor), so offer those.
   sel.innerHTML = '<option value="auto">Auto</option>' + NOTE_NAMES.map((n) => `<option value="${n}">${prettyKey(n)}m</option>`).join('');
@@ -285,7 +368,7 @@ function buildControls() {
   $('#keyLockBtn').onclick = () => { E.ensureCtx(); E.setKeyLock(!state.keyLock); scheduleHash(); };
 
   const mv = $('#masterVol');
-  mv.addEventListener('input', () => { E.setMasterVolume(Number(mv.value)); paintRange(mv); });
+  mv.addEventListener('input', () => { E.setMasterVolume(gainOf(Number(mv.value))); paintRange(mv); });
   paintRange(mv);
 
   $('#playBtn').onclick = () => E.togglePlay();
@@ -307,11 +390,29 @@ function buildControls() {
   $('#helpBtn').onclick = () => $('#help').showModal();
 }
 
+const AUTO_TEMPO_SAVE = 'dcr-auto-tempo';
+function toggleTempoLock() {
+  E.ensureCtx();
+  const before = state.bpm;
+  E.setAutoTempo(!state.autoTempo);
+  try { localStorage.setItem(AUTO_TEMPO_SAVE, state.autoTempo ? '1' : '0'); } catch (_) { /* private mode */ }
+  toast(!state.autoTempo ? `Tempo locked at ${state.bpm} BPM`
+    : state.bpm !== before ? `Auto tempo: ${state.bpm} BPM, the average of the mix` : 'Auto tempo: picks set the tempo');
+}
+
 function renderControls() {
   $('#bpmOut').textContent = state.bpm;
-  const anyLoading = E.activeLayers().some((id) => state.layers[id].loading || state.layers[id].syncing);
-  $('.tempo').classList.toggle('pending', anyLoading);
-  $('#tempoSub').textContent = anyLoading ? 'Syncing…' : 'BPM';
+  const lock = $('#tempoLockBtn');
+  lock.setAttribute('aria-pressed', !state.autoTempo);
+  lock.title = state.autoTempo ? 'Tempo lock is off: every pick sets the tempo to the average of the songs in the mix. Lock it to keep the tempo you set (X)'
+    : 'Tempo lock is on: picks leave the tempo alone. Unlock it for auto tempo (X)';
+  // The number is the tempo asked for. Until the clock has moved to it (the restart waits for the
+  // layers to be stretched to it, then for a bar line) it shows dimmed, with the tempo heard under it.
+  const tempo = E.tempoStatus(), moving = tempo.heard !== tempo.bpm;
+  const syncing = E.activeLayers().some((id) => state.layers[id].syncing);
+  $('.tempo').classList.toggle('pending', moving || syncing);
+  $('#bpmOut').title = moving ? `Playing at ${tempo.heard} BPM until the layers move to ${tempo.bpm}` : '';
+  $('#tempoSub').textContent = moving ? `Now ${tempo.heard} BPM` : syncing ? 'Syncing…' : state.autoTempo ? 'BPM · Auto' : 'BPM · Locked';
   $('#masterKey').value = state.masterKey;
   $('#masterKey').disabled = !state.keyLock;
   $('#keyLockBtn').setAttribute('aria-pressed', state.keyLock);
@@ -337,14 +438,16 @@ function render() {
     layerLabel: layerDef(ui.layer).label,
     disabled: (song) => !E.stemTypeFor(ui.layer, song),
     active: (song) => cur.song === song,
-    loading: (song) => cur.song === song && (cur.loading || isQueued(ui.layer)), // queued ones pulse too
+    loading: (song) => cur.song === song && pickView(ui.layer).busy, // pulses until it's heard (or ready, while stopped)
     // the other layers using a song (the current layer's is already the highlighted segment)
     usedBy: (song) => LAYERS.map((l) => l.id).filter((id) => id !== ui.layer && state.layers[id].song === song),
   });
-  document.body.style.setProperty('--bpm', state.bpm);
+  document.body.style.setProperty('--bpm', E.tempoStatus().heard); // the beat pulses follow what is heard
   scheduleHash();
 }
 E.on('change', render);
+// A hidden tab's timers can run a minute late, the engine's landing 'change' with them: catch up on return.
+document.addEventListener('visibilitychange', () => { if (!document.hidden && $('#layers').children.length) render(); });
 
 // ---------- clock (runs inside the stage's frame) ----------
 let lastBar = -1, lastBeat = -1;
@@ -605,7 +708,7 @@ function bindJam() {
   }, { passive: false });
 }
 
-// ---------- keyboard: Space layer, F FX, Z/C tempo, A/D albums, Q/E pick FX, Tab exit ----------
+// ---------- keyboard: Space layer, F FX, Z/C tempo, X tempo lock, A/D albums, Q/E pick FX, Tab exit ----------
 let fHeld = false;
 function bindKeys() {
   addEventListener('keydown', (e) => {
@@ -629,7 +732,7 @@ function bindKeys() {
     const actions = {
       ' ': () => cycleLayer(1),
       1: () => setLayer('groove'), 2: () => setLayer('lead'), 3: () => setLayer('texture'),
-      z: () => E.setBpm(state.bpm - 1), c: () => E.setBpm(state.bpm + 1),
+      z: () => E.setBpm(state.bpm - 1), c: () => E.setBpm(state.bpm + 1), x: toggleTempoLock,
       a: () => setAlbum(ui.album - 1), d: () => setAlbum(ui.album + 1),
       q: () => cycleFx(-1), e: () => cycleFx(1),
       ArrowLeft: () => wheel.move(-1), ArrowUp: () => wheel.move(-1),
@@ -660,7 +763,9 @@ function updateHash() {
   for (const [letter, id] of Object.entries(SLOT_LETTERS)) {
     const s = state.layers[id];
     if (s.song) p.set(letter, E.MANIFEST[s.song].code);
-    if (Math.round(s.volume * 100) !== 85) p.set('v' + letter, Math.round(s.volume * 100));
+    // The gain in percent, as old links have it (whole numbers); two decimals, so every slider step comes back exactly.
+    const vol = Number((s.volume * 100).toFixed(2));
+    if (vol !== 85) p.set('v' + letter, vol);
     if (s.muted) p.set('m' + letter, 1);
   }
   if (E.activeLayers().length) p.set('bpm', state.bpm);
@@ -686,12 +791,16 @@ async function restoreFromHash() {
     if (key && Object.hasOwn(NOTE, key)) state.masterKey = NOTE_NAMES[NOTE[key]]; // Db, A# etc. -> the picker's spelling
     // Selection order matters: the first slot is the auto-key anchor.
     const order = [...new Set((p.get('a') || 'glt').split('').map((ch) => SLOT_LETTERS[ch]).filter(Boolean).concat(Object.values(SLOT_LETTERS)))];
+    // Every layer's level first: the first pick below builds the audio graph from them. (Set
+    // inside that loop, only the first layer's volume and mute reached the sound.)
+    for (const [letter, id] of Object.entries(SLOT_LETTERS)) {
+      const vol = Number(p.get('v' + letter)); // the gain in percent
+      if (p.has('v' + letter) && vol >= 0 && vol <= 100) state.layers[id].volume = vol / 100;
+      if (p.get('m' + letter) === '1') state.layers[id].muted = true;
+    }
     const loads = [];
     for (const id of order) {
-      const letter = id[0], s = state.layers[id];
-      const vol = Number(p.get('v' + letter));
-      if (p.has('v' + letter) && vol >= 0 && vol <= 100) s.volume = vol / 100;
-      if (p.get('m' + letter) === '1') s.muted = true;
+      const letter = id[0];
       const song = codeToSong.get(p.get(letter));
       if (song) loads.push(E.selectStem(id, song, { noAutoplay: true, keepTempo: true }));
     }
@@ -740,7 +849,7 @@ async function boot() {
     return;
   }
   if (!Object.keys(E.MANIFEST).length) {
-    toast(E.LOCAL ? 'No stems found: check the Stems folder shown in the server window' : 'No stems listed in stems.json', 'error');
+    toast('No stems listed in stems.json', 'error');
     return;
   }
   buildHub();

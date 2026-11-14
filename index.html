@@ -22,10 +22,11 @@
 </head>
 <body>
 <div class="file-note" id="fileNote" hidden>
-  <h2>Start the local server first</h2>
-  <p>Browsers block audio and scripts on pages opened straight from disk. On Windows, double-click
-    <b>start.cmd</b> next to this file: it starts a tiny local server (nothing to install) and opens the app.
-    On a Mac or Linux, run <code>npm run dev</code>.</p>
+  <h2>This page can't run from a file</h2>
+  <p>Browsers block audio and scripts on pages opened straight from disk. Play it at
+    <b>dreamchamberremixed.xyz</b>, or, to work on the code, run <code>npm run dev:live</code> in this
+    folder (it needs Node.js, and streams the songs from the live site) and open the address it
+    prints. With the stems on your machine: <code>npm run stems</code>, then <code>npm run dev</code>.</p>
 </div>
 <script>if (location.protocol === 'file:') document.getElementById('fileNote').hidden = false;</script>
 <canvas id="stage" aria-hidden="true"></canvas>
@@ -70,7 +71,7 @@
       </button>
       <label class="master-vol" title="Master volume">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <input type="range" id="masterVol" min="0" max="1" step="0.01" value="0.9" aria-label="Master volume">
+        <input type="range" id="masterVol" min="0" max="1" step="0.01" value="0.95" aria-label="Master volume">
       </label>
       <button class="tbtn tbtn-icon" id="helpBtn" title="Controls (?)" aria-label="Controls and help">?</button>
     </nav>
@@ -87,6 +88,9 @@
       <div class="ctl">
         <div class="ctl-label">Tempo</div>
         <div class="pill tempo">
+          <button id="tempoLockBtn" class="lock" aria-pressed="false" aria-label="Tempo lock">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" fill="currentColor"/><path class="shackle" d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2"/></svg>
+          </button>
           <button id="tempoDown" aria-label="Slower"><kbd class="kc" data-kb="Z" data-touch="−"></kbd></button>
           <output id="bpmOut" aria-live="polite">116</output>
           <button id="tempoUp" aria-label="Faster"><kbd class="kc" data-kb="C" data-touch="+"></kbd></button>
@@ -172,6 +176,7 @@
           <dt><kbd>F</kbd> (hold)</dt><dd>Play the chosen Audio FX</dd>
           <dt><kbd>Q</kbd><kbd>E</kbd></dt><dd>Choose the Audio FX</dd>
           <dt><kbd>Z</kbd><kbd>C</kbd></dt><dd>Tempo down / up</dd>
+          <dt><kbd>X</kbd></dt><dd>Tempo lock (picks keep your tempo)</dd>
           <dt><kbd>A</kbd><kbd>D</kbd></dt><dd>Previous / next album</dd>
           <dt><kbd>Tab</kbd></dt><dd>Exit Jam</dd>
           <dt><kbd>←</kbd><kbd>→</kbd> <kbd>Enter</kbd></dt><dd>Step around the wheel, pick</dd>

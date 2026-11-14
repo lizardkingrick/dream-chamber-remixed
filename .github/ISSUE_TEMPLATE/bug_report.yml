@@ -39,8 +39,7 @@ body:
       label: Where were you running it?
       options:
         - The live site (dreamchamberremixed.xyz)
-        - Locally with start.cmd
-        - Locally with Node (npm run dev or serve-live)
+        - Locally with Node (npm run dev or npm run dev:live)
   - type: textarea
     id: extra
     attributes:

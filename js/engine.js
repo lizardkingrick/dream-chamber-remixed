@@ -5,9 +5,6 @@
    Swaps are quantized to the next bar. On desktops, a slower high-quality render of each tonal
    layer follows in the background and is swapped in on a later bar (see upgrade). */
 
-import { manifestFromListing } from './manifest.js';
-import { integratedLoudness } from './loudness.js';
-
 export const BEATS = 128; // one transport cycle: the 32-bar loop the bar clock counts
 export const NOTE = { C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11 };
 export const NOTE_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
@@ -35,9 +32,8 @@ export function tonic(k) {
 }
 
 export let MANIFEST = {};
-export let LOCAL = null; // the local server's folder listing, if there is one
 export let ctx = null;
-let master, bus, hp, lp, fxDry, wah, wahWet, phaser, phWet, analyser, mediaDest, glueIn;
+let master, bus, hp, lp, fxDry, wah, wahWet, phaser, phWet, analyser, lowAnalyser, mediaDest, glueIn;
 // The FX params whose schedules are tracked (see tracked): the filters' detune and Q, the wet/dry levels.
 const fxLine = {};
 let recorder = null;
@@ -45,6 +41,7 @@ let recorder = null;
 export const state = {
   bpm: 116,
   tempoTouched: false, // tempo set by hand (or by a share link) since the last stem change, which sets it again (see autoTempo)
+  autoTempo: true, // stem changes set the tempo to the average of the mix; off, it stays where the player put it (see setAutoTempo)
   keyLock: true,
   masterKey: 'auto',
   playing: false,
@@ -67,7 +64,9 @@ for (const l of LAYERS) {
 
 // The tempo the running sources were rendered at. state.bpm moves as soon as the user
 // nudges tempo; the clock keeps the old tempo until the re-rendered stems take over.
-let clockBpm = state.bpm;
+// A restart is committed a moment before its bar line (see retime): until `clockFrom` the old
+// tempo, `clockWas`, is still the one heard (see tempoStatus).
+let clockBpm = state.bpm, clockWas = clockBpm, clockFrom = 0;
 
 // ---------- events ----------
 const listeners = { change: [], status: [] };
@@ -75,8 +74,9 @@ export const on = (ev, fn) => listeners[ev].push(fn);
 // A throwing UI listener must not leave the engine half-updated (e.g. a layer stuck loading).
 const emit = (ev, arg) => listeners[ev].forEach((fn) => { try { fn(arg); } catch (err) { console.error(err); } });
 // Every change also restarts the wait before the mix is kept for the next visit (see keepMix) and
-// before the next hq upgrade starts (see upgrade).
-const changed = () => { emit('change'); keepLater(); upgradeSoon(); checkSoon(); };
+// before the next hq upgrade starts (see upgrade), and sets the 'change' for the next pick that lands
+// on a bar line (see landSoon: first, so every landing the UI sees ahead of it has its 'change').
+const changed = () => { landSoon(); emit('change'); keepLater(); upgradeSoon(); checkSoon(); };
 const status = (msg, kind) => emit('status', { msg, kind });
 
 // Why a stem didn't load, in words a player can act on (the details go to the console).
@@ -120,20 +120,10 @@ export function semisFor(songKey, swap) {
 const renderKey = (song, type, bpm = state.bpm, semis = semisFor(MANIFEST[song].key)) => `${song}|${type}|${bpm}|${semis}|${ctx.sampleRate}`;
 const isCurrent = (s) => !!s.buffer && s.bufferKey === renderKey(s.song, s.type);
 
-// The local server (tools/serve.ps1) lists the stem folders, so the song list comes straight
-// from disk with no build step. The hosted site has no listing and uses the prebuilt stems.json.
-// Both are asked for at once: on the hosted site the listing is a 404, and waiting for that
-// before asking for stems.json cost a round trip before any stem could start.
+// The song list is the prebuilt stems.json (tools/build-stems.mjs), served next to the page.
 export async function loadManifest(url) {
   keptKeys(); // meanwhile, so a share link's first render knows whether it was kept (see keepMix)
-  const hosted = fetch(url).then((res) => res.json());
-  hosted.catch(() => {}); // unused, and maybe missing, when the local listing answers
-  try {
-    const res = await fetchPatiently('__local/files', { cache: 'no-store' });
-    if (res.ok && (res.headers.get('content-type') || '').includes('json')) LOCAL = await res.json();
-  } catch (_) { /* not the local server */ }
-  if (LOCAL && LOCAL.stems && LOCAL.stems.length) MANIFEST = manifestFromListing(LOCAL);
-  else MANIFEST = await hosted;
+  MANIFEST = await fetch(url).then((res) => res.json());
   return MANIFEST;
 }
 
@@ -192,8 +182,8 @@ async function buildMaster(c) {
 // The live graph starts on the compressor glue and moves to the limiter once its module has
 // loaded (normally long before the first stem is ready; play() waits a moment for it).
 let limiterReady = null;
-// AudioWorklet only exists on HTTPS or localhost, so a phone opening the dev server by its LAN
-// address always hears the fallback: say so, or a check made that way tests the wrong chain.
+// AudioWorklet only exists on HTTPS or localhost, so a copy opened over plain http anywhere else
+// always hears the fallback: say so, or a check made that way tests the wrong chain.
 const noLimiter = (err) => console.warn(`The true-peak limiter is unavailable, using the compressor glue${
   window.isSecureContext === false ? ' (it needs HTTPS or localhost)' : ''}:`, err);
 function upgradeGlue(c, fallback, fbLevel, glueOut) {
@@ -300,6 +290,18 @@ export function ensureCtx() {
   glueOut.connect(master);
   glueOut.connect(mediaDest); // recordings are taken before the volume slider, at the export's level
   master.connect(analyser); analyser.connect(ctx.destination);
+  // The kick's band, for the visuals only (see meters): the output in mono through a 40-120 Hz
+  // band-pass into an analyser that leads nowhere, so nothing of it is heard.
+  const lowCut = ctx.createBiquadFilter(); lowCut.type = 'highpass'; lowCut.frequency.value = 40;
+  lowCut.channelCount = 1; lowCut.channelCountMode = 'explicit';
+  lowAnalyser = ctx.createAnalyser();
+  lowAnalyser.fftSize = METER.lowWin;
+  [0, 1].reduce((node) => {
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 120;
+    node.connect(f);
+    return f;
+  }, lowCut).connect(lowAnalyser);
+  master.connect(lowCut);
 
   // Chromium stops running a node once all its inputs have ended, and automation timed in that
   // gap is lost (measured: an insert reopened just after its sources stopped, as on Stop during
@@ -317,7 +319,7 @@ export function ensureCtx() {
     s.fxIn.connect(s.gain);
     s.gain.gain.value = s.muted ? 0 : s.volume;
     s.analyser = ctx.createAnalyser();
-    s.analyser.fftSize = 256;
+    s.analyser.fftSize = METER.win;
     s.gain.connect(s.analyser);
     s.gain.connect(bus);
   }
@@ -548,7 +550,7 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
 
 const encodePath = (p) => encodeURI(p).replace(/#/g, '%23');
 
-// The server answers 429/503 when this visitor (or everyone) has too many downloads going;
+// A host may answer 429/503 when it is busy or this visitor has too many downloads going;
 // wait as long as it asks and try again instead of failing the stem. Earlier downloads on a slow
 // link can hold the slots for a while, so give up only after two minutes, not a set count.
 // Retries stop as soon as nothing wants the file any more (a prefetch, or a pick since replaced),
@@ -698,7 +700,7 @@ function stepOf(src) {
 }
 
 // Originals are kept as 16-bit, half the memory of the decoder's floats. The stems are 16-bit, so a
-// WAV or FLAC comes back as exactly its own values. A lossy decode is rounded to 16 bits (noise
+// FLAC comes back as exactly its own values. A lossy decode is rounded to 16 bits (noise
 // near -98 dBFS) and, where it rings past full scale (Vorbis does, by up to 0.5 dB on 18 of the
 // stems), scaled down to fit instead of clipped: `gain` is that scale, which render() puts back on
 // the buffer's trim. Done in steps (see inSteps), so the page stays smooth.
@@ -717,21 +719,18 @@ async function toInt16(buf, lossy) {
   return { channels, length: buf.length, sampleRate: buf.sampleRate, lossy, gain: peak, bytes: buf.length * channels.length * 2 };
 }
 
-// Where a stem comes from. A local listing gives each stem's URL (`src`). The hosted build has an
-// Ogg Vorbis copy (small) and a FLAC copy (lossless, about 4x the Ogg) of each, both page-relative
-// (works at any mount point): browsers that can't decode Ogg (Safari, and every iOS browser,
-// before 18.4) get the FLAC. Whether this one can is guessed before the first pick, so those
+// Where a stem comes from. stems.json lists an Ogg Vorbis copy (small) and a FLAC copy (lossless,
+// about 4x the Ogg) of each, both page-relative (works at any mount point): browsers that can't
+// decode Ogg (Safari, and every iOS browser, before 18.4) get the FLAC. Whether this one can is guessed before the first pick, so those
 // don't download an Ogg first, and settled by the first decode. WebKit gets the FLAC from the
 // start: an Ogg there would be its new decoder's (18.4), and a FLAC is sample-exact in every
 // decoder (about 4x the download; Cloudflare serves it for free); its Ogg is tried only if the FLAC
 // won't decode. An Ogg that decodes but doesn't line up with its master (see exactDecode) also
-// counts as undecodable. Only a dev checkout has the WAV masters next to it (../Stems, see
-// serve.mjs), so only there are they the last resort.
+// counts as undecodable.
 let oggOk = null, flacOk = true, oggsMissing = false;
 function canOgg() {
   try { return new Audio().canPlayType('audio/ogg; codecs="vorbis"') !== ''; } catch (_) { return true; } // no media element: let decoding tell
 }
-const nearWavs = () => !!LOCAL || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
 
 // With `early`, the promise resolves as soon as the stem is decoded: until its 16-bit copy is made
 // (`channels`), the original holds the decoder's `floats` instead.
@@ -744,8 +743,8 @@ function getOriginal(info, type, onProgress, early = false) {
     const progress = (p) => entry.listeners.forEach((fn) => fn(p));
     let decoded;
     const first = new Promise((resolve) => { decoded = resolve; });
-    // Lossy codecs pad a few ms that must be trimmed off the loop; WAVs and FLACs are the loop
-    // exactly, as long as the decoder says so (see exactDecode).
+    // Lossy codecs pad a few ms that must be trimmed off the loop; a FLAC is the loop exactly, as
+    // long as the decoder says so (see exactDecode).
     const load = async (path) => {
       entry.downloading = true;
       let bytes, buf;
@@ -754,7 +753,7 @@ function getOriginal(info, type, onProgress, early = false) {
       try { buf = await decode(bytes); } catch (err) {
         throw Object.assign(new Error(`can't decode ${path}: ${(err && err.message) || err}`), { name: 'EncodingError' });
       }
-      const lossy = !/\.(wav|flac)$/i.test(path);
+      const lossy = !/\.flac$/i.test(path);
       if (!exactDecode(info, type, buf, lossy)) {
         throw Object.assign(new Error(`${path} decodes as ${buf.length} samples at ${buf.sampleRate} Hz, out of line with its master`), { name: 'EncodingError', mismatch: true });
       }
@@ -764,19 +763,14 @@ function getOriginal(info, type, onProgress, early = false) {
       const frames = info.frames && buf.sampleRate === STEM_RATE ? info.frames[type] || 0 : 0;
       const orig = { length: buf.length, frames, sampleRate: buf.sampleRate, lossy, floats: Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c)) };
       decoded(orig);
-      // A loudness to measure (local stems) goes first: the first render waits for it, not the copy.
-      const measuring = measureLoudness(info, type, buf, lossy);
-      if (measuring) await measuring.catch(() => {});
       return Object.assign(orig, await toInt16(buf, lossy), { floats: null });
     };
     entry.promise = (async () => {
-      if (info.src && info.src[type]) return load(info.src[type]);
       const ogg = info.oggs && info.oggs[type], flac = flacOk && info.flacs && info.flacs[type];
       oggOk ??= canOgg();
       const tries = [];
       if (ogg && !oggsMissing && (oggOk || !flac)) tries.push(ogg); // no FLAC to fall back on: the guess may be wrong
       if (flac) tries[webkit ? 'unshift' : 'push'](flac);
-      if (nearWavs()) tries.push('../' + id);
       // A copy this browser can't decode, or that isn't there, moves on to the next; a download that
       // failed ends it (the next copy would fare no better, and is bigger).
       let undecodable = false, last = new Error(`fetch failed (404): no copy of ${id} here`);
@@ -863,10 +857,9 @@ let preRenderTimer = 0;
 const preRenderSoon = () => { clearTimeout(preRenderTimer); preRenderTimer = setTimeout(preRender); };
 
 // How many beats a file loops over (the nearest whole number of bars at the BPM in its name:
-// 128 for stems, 64 for the Da Funk melody gun) and how many of its samples form the loop.
-// A WAV is the loop exactly, even when it's a few samples off the nominal length (the gun
-// loops; the HBFS guns are really ~123.5 BPM). A lossy decode is trimmed back to the ideal
-// length when it only overshoots by codec padding.
+// 128 for the stems) and how many of its samples form the loop. A lossless file is the loop
+// exactly, even when it's a few samples off the nominal length. A lossy decode is trimmed back
+// to the ideal length when it only overshoots by codec padding.
 export function loopShape(length, bpm, sampleRate, lossy = false) {
   const beats = Math.max(4, Math.round(length / sampleRate * bpm / 60 / 4) * 4);
   const ideal = Math.round(beats * 60 / bpm * sampleRate);
@@ -876,33 +869,15 @@ export function loopShape(length, bpm, sampleRate, lossy = false) {
 
 // ---------- loudness ----------
 // The stems differ by 7 LU (-10.1 to -17.1 LUFS), so a swap on one layer could jump or drop
-// several dB. Each original is measured once (BS.1770, see loudness.js) and played with a trim
-// towards the average of its kind: that keeps today's balance between Groove, Lead and Extra and
-// only moves the outliers. The measurements are a few bytes, so they outlive the audio caches.
-// The hosted stems.json has them already (measured from the WAVs at build time: lufs[type]);
-// local stems and the instrument guns are measured here, once per visit, as they are decoded.
-const TYPE_LUFS = { groove: -12.6, all: -12.6, lead: -12.6, texture: -14.6, guns: -14.3 };
-const loudness = new Map(); // stem id -> Promise of LUFS
-const knownLufs = (info, type) => (info.lufs && Number.isFinite(info.lufs[type]) ? info.lufs[type] : null);
-// From the decoder's floats (`buf`), the original's loop only, as it plays. Returns the
-// measurement when it starts one.
-function measureLoudness(info, type, buf, lossy) {
-  const id = info.stems[type];
-  if (knownLufs(info, type) !== null || loudness.has(id)) return null;
-  const chans = [0, 1].map((c) => buf.getChannelData(Math.min(c, buf.numberOfChannels - 1)));
-  const p = integratedLoudness(chans, buf.sampleRate, loopShape(buf.length, info.bpm, buf.sampleRate, lossy).inLen);
-  p.catch(() => loudness.delete(id)); // measured again the next time it's decoded
-  loudness.set(id, p);
-  return p;
-}
+// several dB. Each stem's loudness is measured from its master when stems.json is built (BS.1770,
+// see tools/build-stems.mjs: lufs[type]) and the stem plays with a trim towards the average of its
+// kind: that keeps today's balance between Groove, Lead and Extra and only moves the outliers.
+// A stem listed without one plays as it is.
+const TYPE_LUFS = { groove: -12.6, all: -12.6, lead: -12.6, texture: -14.6 };
 function stemTrim(info, type) {
-  const known = knownLufs(info, type), measured = loudness.get(info.stems[type]);
-  if (known === null && !measured) return Promise.reject(new Error(`no loudness for ${info.stems[type]}`));
-  return (known !== null ? Promise.resolve(known) : measured).then((lufs) => {
-    const want = TYPE_LUFS[info.album === 'guns' ? 'guns' : type]; // an instrument-gun part
-    const db = Number.isFinite(lufs) ? Math.max(-6, Math.min(6, want - lufs)) : 0;
-    return Math.pow(10, db / 20);
-  });
+  const lufs = info.lufs && info.lufs[type];
+  const db = Number.isFinite(lufs) ? Math.max(-6, Math.min(6, TYPE_LUFS[type] - lufs)) : 0;
+  return Math.pow(10, db / 20);
 }
 // The trim a rendered buffer plays with (render() puts it on the buffer).
 const trimOf = (buffer) => buffer.trim ?? 1;
@@ -956,14 +931,10 @@ async function stretchStem(info, type, bpm, semis, { onProgress, ...job }) {
     }
     return out;
   };
-  // A loudness still being measured (from the decode, see getOriginal) finishes meanwhile.
-  const [out, trim] = await Promise.all([
-    stretchInWorker(chans, sr, len, ratio, { ...job, type, inLen, srcRate }),
-    stemTrim(info, type).catch((err) => { console.warn('loudness not measured:', err); return 1; }),
-  ]);
+  const out = await stretchInWorker(chans, sr, len, ratio, { ...job, type, inLen, srcRate });
   const buf = ctx.createBuffer(2, len, sr);
   for (let c = 0; c < 2; c++) await inSteps(len, copyInto, 0, out.channels[c], buf.getChannelData(c));
-  buf.trim = trim * gain; // and back up by what toInt16 scaled a hot lossy decode down
+  buf.trim = stemTrim(info, type) * gain; // and back up by what toInt16 scaled a hot lossy decode down
   buf.quality = out.quality || 'fast'; // an older worker doesn't say: it only has the fast path
   buf.formant = !!out.formant;
   return buf;
@@ -1015,7 +986,7 @@ function render(song, type, onProgress, at) {
 // works as before.
 // A render's grade is part of its id ('hq' for an upgrade, see upgrade), so a mix that was upgraded
 // after it was kept is stored again, and a reload takes the hq render of a key when there is one.
-const KEEP = { db: 'dcr-renders', store: 'mix', idle: 5000, version: 7 }; // bump `version` when renders change (6: the worker's faster 48 kHz conversion; 7: a lossless decode loops over stems.json's frames, not whatever length the decoder gave)
+const KEEP = { db: 'dcr-renders', store: 'mix', idle: 5000, version: 8 }; // bump `version` when renders change (6: the worker's faster 48 kHz conversion; 7: a lossless decode loops over stems.json's frames, not whatever length the decoder gave; 8: steadier sung leads)
 const gradeOf = (buf) => (buf.upgraded ? 'hq' : 'fast');
 const keptId = (key, info, type, grade) => `${key}|${info.stems[type]}|${grade}|${KEEP.version}`;
 const idbDone = (req) => new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
@@ -1216,7 +1187,9 @@ function setTracked(line, t, v) {
 // once it's gone), out (the last of them, into the layer), fade (its tracked fade gain), buf (its
 // AudioBuffer, held here: the buffer carries its trim, see trimOf, and `src.buffer` can hand back a
 // fresh wrapper without it in WebKit, see tracked), bpm (the tempo a layer source was rendered at),
-// startAt, stopAt (when it is due to be silent and stopped; Infinity while it plays on) }.
+// song (a layer source's song: what pickStatus says is heard), startAt, when (a layer source's bar
+// line: at full level from there), stopAt (when it is due to be silent and stopped; Infinity while it
+// plays on) }.
 // A layer's records are its `cur` and, once replaced, its `tails`; a held Stutter's are fxOn.repeats.
 const live = new Set();
 function track(x) {
@@ -1251,7 +1224,7 @@ function startSource(layerId, when, offset, from) {
     when += skip; offset += skip;
   }
   stopSource(layerId, when);
-  const buffer = from ? from.buf : s.buffer, bpm = from ? from.bpm : s.bufferBpm;
+  const buffer = from ? from.buf : s.buffer, bpm = from ? from.bpm : s.bufferBpm, song = from ? from.song : s.song;
   const dur = buffer.duration, len = buffer.length, sr = ctx.sampleRate;
   const at = frame(Math.max(when - XFADE, ctx.currentTime));
   const src = ctx.createBufferSource();
@@ -1277,7 +1250,7 @@ function startSource(layerId, when, offset, from) {
   const f = Math.round((offset - (when - at) - behind) * sr); // the loop position at `at`, in whole frames
   src.start(at, (((f % len) + len) % len) / sr);
   const x = { kind: 'layer', layerId, src, nodes: [src, trim, sg], out: sg, fade: { param: sg.gain, pts: [[at, 0], [full, 1]] },
-    buf: buffer, bpm, startAt: at, stopAt: Infinity };
+    buf: buffer, bpm, song, startAt: at, when: full, stopAt: Infinity };
   track(x);
   s.cur = x;
   s.source = src;
@@ -1321,11 +1294,13 @@ function unstart(s) {
 // The sources of a layer that are or will be sounding, outgoing ones included (records, see startSource).
 const sourcesOf = (s) => [...s.tails.filter((x) => x.stopAt > ctx.currentTime), ...(s.cur ? [s.cur] : [])];
 
-// The buffer a layer is heard playing at time t: until a pending swap's bar line, the outgoing one.
-function bufferAt(s, t) {
+// The source record a layer is heard playing at time t, or null: until a pending swap's bar line,
+// the outgoing one.
+function heardAt(s, t) {
   const heard = [...s.tails, ...(s.cur ? [s.cur] : [])].filter((x) => x.startAt <= t && x.stopAt > t);
-  return heard.length ? heard[heard.length - 1].buf : null;
+  return heard.length ? heard[heard.length - 1] : null;
 }
+const bufferAt = (s, t) => { const x = heardAt(s, t); return x ? x.buf : null; };
 
 // The backstop: whatever the browser makes of a stop or a fade, no source plays on once it should
 // have gone, and none plays out of time. Checked after every change, and every CHECK_MS while any
@@ -1397,6 +1372,7 @@ function checkSources() {
 const openGroups = new Set();
 let tempoHeld = false; // a tempo restart waits for a group to land (see resyncOnce)
 let tempoAt = 0; // where the next tempo restart lands, when a stem change brought it: that change's bar line (see resyncOnce)
+let restartAt = 0; // the bar line a planned restart waits for (see tempoWait), once it's known
 let heldGroup = null; // the group single picks join during a hold
 function swapGroup(members) {
   const g = { members: new Set(members), waiting: new Set(members), starts: [], ready: new Set() };
@@ -1437,6 +1413,65 @@ function dropHeld(at) {
   for (const g of heldGroups()) { g.dropAt = at; settle(g, 'fx'); }
   heldGroup = null;
   changed();
+}
+
+// ---------- when a pick is heard ----------
+// A pick isn't heard at once: it downloads, is stretched, then waits for its bar line (or the
+// others picked with it, a held Audio FX's release, or the restart at a new tempo), while the layer
+// plays its old song on. For the UI, read on 'change':
+// pickStatus(layerId) -> { song, stage, progress, at, old }
+//   stage: 'empty' | 'download' (progress: 0..1) | 'stretch' (decoding and stretching) |
+//     'group' (ready; waits for the picks made with it, or for the other layers' new key) |
+//     'fx' (ready; drops in as the held Audio FX is let go) | 'tempo' (ready at a tempo the clock
+//     hasn't reached; joins with the restart) | 'bar' (scheduled for its bar line) | 'playing' (heard) |
+//     'ready' (stopped: plays with the next Play) | 'error' (silent: see the layer's `error`)
+//   at: the audio-clock time it's heard from ('bar', and 'tempo' once the restart is planned; else 0).
+//     The wait is at - clockNow() seconds: animate it with CSS or element.animate(). The engine sends a
+//     'change' as each pick lands, so the UI needs no timer or frame callback of its own to move on.
+//   old: the song the layer is heard playing meanwhile, or null (silent).
+// An hq upgrade, a re-key or a tempo restart of the song already heard isn't a new pick: 'playing'.
+// tempoStatus() -> { bpm: the tempo asked for, heard: the one the clock plays now, at: when it moves }
+export const clockNow = () => (ctx ? ctx.currentTime : 0);
+export function pickStatus(layerId) {
+  const s = state.layers[layerId], now = clockNow();
+  const st = { song: s.song, stage: 'empty', progress: 1, at: 0, old: null };
+  if (!s.song) return st;
+  const heard = state.playing && ctx ? heardAt(s, now) : null, x = s.cur;
+  if (heard && heard.song === s.song) { st.stage = 'playing'; return st; }
+  st.old = heard ? heard.song : null;
+  const g = s.group && openGroups.has(s.group) ? s.group : null;
+  if (s.loading) { st.stage = s.progress < 1 ? 'download' : 'stretch'; st.progress = s.progress; }
+  else if (x && x.song === s.song && x.when > now) { st.stage = 'bar'; st.at = x.when; }
+  else if (s.syncing) st.stage = 'stretch'; // rendered again: the key or tempo moved while it loaded
+  else if (state.playing && queued(layerId)) st.stage = 'fx';
+  else if (g && [...g.waiting].some((m) => m !== layerId)) st.stage = 'group';
+  else if (!state.playing) st.stage = 'ready';
+  else if (s.error) st.stage = 'error';
+  else if (s.bufferBpm !== clockBpm) { st.stage = 'tempo'; st.at = restartAt > now ? restartAt : tempoAt > now ? tempoAt : 0; }
+  else st.stage = 'bar'; // about to be put on a bar line
+  return st;
+}
+export function tempoStatus() {
+  const now = clockNow(), moving = state.playing && now < clockFrom;
+  const heard = !state.playing ? state.bpm : moving ? clockWas : clockBpm;
+  const at = heard === state.bpm ? 0 : moving ? clockFrom : restartAt > now ? restartAt : tempoAt > now ? tempoAt : 0;
+  return { bpm: state.bpm, heard, at };
+}
+// One 'change' when the next pick, or a restart's new tempo, is heard: the soonest of them, set again
+// before every change is reported (a timer that fires a little early just sets itself again). Set
+// after it, a landing the UI had just read as ahead could pass before this looked, and the UI was
+// left saying "Joins on the next bar" (measured: the tempo stayed "pending" after an FX release).
+let landTimer = 0, landAt = Infinity;
+function landSoon() {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  let t = state.playing && clockFrom > now ? clockFrom : Infinity;
+  for (const l of LAYERS) { const x = state.layers[l.id].cur; if (x && x.when > now && x.when < t) t = x.when; }
+  if (t === landAt) return;
+  clearTimeout(landTimer);
+  landAt = t;
+  if (t === Infinity) return;
+  landTimer = setTimeout(() => { landAt = Infinity; landSoon(); emit('change'); }, Math.max(10, (t - now) * 1000 + 5));
 }
 
 // ---------- hq upgrades ----------
@@ -1532,6 +1567,7 @@ function swapIn(id, buf) {
 function retime(t) {
   const bars = (t - state.transportStart) / barSec(), cycle = BEATS / 4;
   const pos = ((bars % cycle) + cycle) % cycle;
+  clockWas = clockBpm; clockFrom = t;
   clockBpm = state.bpm;
   state.transportStart = frame(t - pos * barSec()); // on the sample grid, so every later bar line is too
   retuneSweeps(t);
@@ -1613,6 +1649,7 @@ export async function play() {
   if (!ready.length) { changed(); return; }
   const t = frame(ctx.currentTime + LEAD);
   clockBpm = state.bpm;
+  clockFrom = 0;
   state.transportStart = t;
   if (fxOn && fxOn.id === 'wah') startWah(t); // a held Wah locks onto the new downbeat
   retuneSweeps(t);
@@ -1621,6 +1658,7 @@ export async function play() {
     else stopSource(l.id, t); // a cleared layer may still be fading out from before
   }
   state.playing = true;
+  freshFrom = null; // the first picks' tempo has been heard: it holds now
   changed();
 }
 
@@ -1727,7 +1765,13 @@ async function resyncOnce() {
     // and clearLayer), or the next one if the renders took longer. A bar line of the old clock is
     // one of the new clock too (see retime), so the new downbeat lands where the old one was due.
     let t = !tempoAt ? frame(ctx.currentTime + LEAD) : tempoAt >= soonest() + XFADE ? tempoAt : nextBarTime();
-    if (tempoAt && await tempoWait(t, state.bpm)) { resyncAgain = true; resyncGroups.unshift(...groups); changed(); return; }
+    if (tempoAt) {
+      restartAt = t; // the picks waiting for it can say when (see pickStatus)
+      emit('change');
+      const moved = await tempoWait(t, state.bpm);
+      restartAt = 0;
+      if (moved) { resyncAgain = true; resyncGroups.unshift(...groups); changed(); return; }
+    }
     if (t < soonest() + XFADE) t = nextBarTime(); // the wait ran late
     tempoAt = 0;
     assign();
@@ -1794,6 +1838,7 @@ export async function selectStem(layerId, song, opts = {}) {
   // The tempo moves to the average with this pick in (see autoTempo): a share link's picks keep its
   // tempo (keepTempo), and Random sets it once for all of its picks (tempoSet).
   const auto = !opts.keepTempo && !opts.tempoSet && autoTempo({ [layerId]: song });
+  if (opts.keepTempo) { tempoFresh = false; freshFrom = null; } // the link's tempo is one that was set
   const rootBefore = masterRoot();
   const gen = playGen;
   // During an FX hold a pick waits for the release (see dropHeld); the layer remembers what it
@@ -1836,6 +1881,7 @@ export async function selectStem(layerId, song, opts = {}) {
   // hold join the one held group) leaves the layer's place in it to that pick. Settled by the old
   // one, the new pick found the group no longer waiting for it and dropped in mid-hold.
   s.group = group;
+  s.joinGroup = (g) => { group = s.group = g; }; // switching auto tempo on while it loads (see setAutoTempo)
   const leave = () => { if (s.group !== group) settle(group, layerId); };
   const tag = ++s.renderTag;
   try {
@@ -1895,8 +1941,17 @@ export async function selectStem(layerId, song, opts = {}) {
     if (!activeLayers().length) endJam();
     status(loadError(song, err), 'error');
     // The average goes back to the stems that are left, unless the tempo was set by hand (or by a
-    // share link) since.
-    const back = !opts.keepTempo && !state.tempoTouched && autoTempo({}, state.playing ? clockBpm : state.bpm);
+    // share link) since. So it does on a locked page whose first picks set the tempo and haven't
+    // played yet (see freshFrom): to the picks still on their way, or with none left, to the tempo
+    // shown before, and the next pick brings its own again.
+    if (freshFrom !== null) tempoFresh = true;
+    let back = !opts.keepTempo && !state.tempoTouched && autoTempo({}, state.playing ? clockBpm : state.bpm);
+    if (freshFrom !== null && !activeLayers().length) {
+      back = state.bpm !== freshFrom;
+      state.bpm = freshFrom;
+      tempoFresh = true;
+      freshFrom = null;
+    }
     // Settled only now that it's gone: the rest of its group, if keyed against it, no longer
     // counts as current and waits for the re-key below instead of starting in the wrong key.
     settle(group, layerId);
@@ -1975,12 +2030,21 @@ export function randomize() {
 
 // ---------- auto tempo ----------
 // A stem change by the player (a pick, Random, a clear) sets the tempo to the rounded average of
-// the native BPMs of the stems in the mix after it (an instrument gun's is its song's), or keeps it
-// if it is near that already (see TEMPO_BAND), so the mix plays at the tempo in the middle of its
-// songs, and a first pick at its own. A tempo set by hand
-// holds until the next stem change; a share link keeps its own (its picks are keepTempo).
+// the native BPMs of the stems in the mix after it, or keeps it if it is near that already (see
+// TEMPO_BAND), so the mix plays at the tempo in the middle of its songs, and a first pick at its
+// own. A tempo set by hand holds until the next stem change; a share link keeps its own (its
+// picks are keepTempo).
 // `picks` maps layer ids to their new songs (null: cleared); null when no stem would be left.
+// With auto tempo switched off (see setAutoTempo) a stem change leaves the tempo alone. One
+// exception: on a page that opened with it off (main.js remembers the switch) and where nothing
+// has set the tempo yet, the 116 shown is only a place to start, so the first pick still brings
+// its own tempo, or Random the average of its picks, and that one holds.
 // (`in`, not Object.hasOwn: Safari has that only from 15.4, and picks is a plain object.)
+let tempoFresh = true; // no pick, tempo button, share link or switching auto off has set the tempo yet
+// The tempo shown before the first picks set one, while none of them has played and nothing else
+// has set it since: a first pick that fails gives the tempo back (see selectStem), so a song never
+// heard doesn't fix the tempo of the next pick on a locked page.
+let freshFrom = null;
 function meanBpm(picks = {}) {
   const songs = LAYERS.map((l) => (l.id in picks ? picks[l.id] : state.layers[l.id].song)).filter(Boolean);
   if (!songs.length) return null;
@@ -1997,6 +2061,7 @@ function meanBpm(picks = {}) {
 // `near` is the tempo to keep: the one asked for, or the clock's for a pick that failed (it goes back).
 const TEMPO_BAND = handheld ? 2 : 0;
 function autoBpm(picks = {}, near = state.bpm) {
+  if (!state.autoTempo && !tempoFresh) return state.bpm;
   const bpm = meanBpm(picks), others = activeLayers().some((id) => !(id in picks));
   return bpm !== null && others && Math.abs(bpm - near) <= TEMPO_BAND ? near : bpm;
 }
@@ -2004,6 +2069,8 @@ function autoBpm(picks = {}, near = state.bpm) {
 function autoTempo(picks, near) {
   const bpm = autoBpm(picks, near);
   state.tempoTouched = false;
+  if (tempoFresh) freshFrom ??= state.bpm;
+  tempoFresh = false;
   if (bpm === null || bpm === state.bpm) return false;
   state.bpm = bpm;
   pumpJobs(); // renders and pre-renders at the old tempo stop now
@@ -2017,6 +2084,8 @@ export function setBpm(bpm, { immediate = false } = {}) {
   if (bpm === state.bpm) return;
   state.bpm = bpm;
   state.tempoTouched = true;
+  tempoFresh = false;
+  freshFrom = null;
   tempoAt = 0; // by hand: as soon as it can (see resyncOnce)
   changed();
   pumpJobs(); // a pre-render at the old tempo stops now
@@ -2024,6 +2093,31 @@ export function setBpm(bpm, { immediate = false } = {}) {
   // Rendering is heavy; wait until the user stops nudging.
   bpmDue = true;
   bpmTimer = setTimeout(() => { bpmDue = false; rebuildAll(); }, immediate ? 0 : 450);
+}
+// Auto tempo on or off. Switching it on moves the tempo to the average of the mix at once, as the
+// next stem change would have (one restart, like a tempo set by hand; nothing if it is there
+// already, so flicking the switch back and forth renders once at most). Switching it off changes
+// nothing now: the tempo shown is the one that stays, until the player moves it.
+// With a pick still loading (made while it was off), a restart now would cut the song that pick
+// replaces and leave its layer silent until the pick landed a bar later (2.8-3.3 s measured with a
+// 2 s download): the tempo moves the way a pick moves it instead, in a group with the picks on their
+// way, so the restart waits for them (see holdTempo) and the old songs play on till then.
+export function setAutoTempo(on) {
+  on = !!on;
+  if (on === state.autoTempo) return;
+  state.autoTempo = on;
+  if (!on) { tempoFresh = false; freshFrom = null; }
+  const bpm = on ? autoBpm() : null;
+  const loading = state.playing ? activeLayers().filter((id) => state.layers[id].loading) : [];
+  if (bpm === null || bpm === state.bpm) changed();
+  else if (loading.length) {
+    const loose = loading.filter((id) => !openGroups.has(state.layers[id].group)); // the others' groups hold it already
+    if (loose.length) { const g = swapGroup(loose); for (const id of loose) state.layers[id].joinGroup(g); }
+    autoTempo({});
+    changed();
+    rebuildAll(); // the other layers render at the new tempo meanwhile (see resyncOnce)
+  } else { setBpm(bpm, { immediate: true }); state.tempoTouched = false; }
+  preRenderSoon(); // a hovered song was pre-rendered at the other setting's tempo
 }
 export function setKeyLock(on) { state.keyLock = on; changed(); rebuildAll(); }
 export function setMasterKey(k) { state.masterKey = k; changed(); rebuildAll(); }
@@ -2426,7 +2520,26 @@ function restFx(t) {
 }
 
 // ---------- meters (for the visuals) ----------
-const meterBuf = new Float32Array(256);
+// A layer's level is the loudness (RMS) of its last 2048 samples, 43-46 ms: two periods of the
+// lowest kick. (256 samples, 5 ms, caught a different slice of a bass note's wave on every frame,
+// so a steady groove read anywhere from 0.15 to 0.9.) It depends only on the audio, so a 60 Hz
+// and a 120 Hz screen see the same, and its average stays where it was; the stage does its own
+// smoothing on top. Bass is the level of the last 1024 samples of the output's 40-120 Hz band
+// (see ensureCtx), which is where the kick is: the FFT's bins are 86-94 Hz wide, so its lowest
+// ones were 90-500 Hz and barely moved with it. Bass stays in dB like the analyser's bytes, 70 dB
+// over 0..1, placed (1 = -6 dB) so it averages about where those bins did; it rises at once and
+// falls at a set rate in real time (to 37% in `lowFall` seconds), so a frame that came late
+// doesn't miss a kick and every screen sees the same decay.
+const METER = { win: 2048, gain: 3.2, lowWin: 1024, lowFall: 0.06, lowTop: -6, lowRange: 70 };
+const meterBuf = new Float32Array(METER.win), lowBuf = new Float32Array(METER.lowWin);
+let lowHeld = 0, meterAt = 0;
+// Every `step`th sample is enough for a level (within 0.15 dB), and this runs on every frame.
+function meterLevel(an, buf, step) {
+  an.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i += step) sum += buf[i] * buf[i];
+  return Math.sqrt(sum * step / buf.length);
+}
 let spectrum = null;
 const meterOut = { groove: 0, lead: 0, texture: 0, bass: 0, mid: 0, high: 0, beat: 0, bar: 0, beatIndex: -1, spectrum: null };
 export function meters() {
@@ -2435,16 +2548,16 @@ export function meters() {
   if (!ctx) return meterOut;
   for (const l of LAYERS) {
     const s = state.layers[l.id];
-    if (!s.source) continue;
-    s.analyser.getFloatTimeDomainData(meterBuf);
-    let sum = 0;
-    for (let i = 0; i < meterBuf.length; i++) sum += meterBuf[i] * meterBuf[i];
-    meterOut[l.id] = Math.min(1, Math.sqrt(sum / meterBuf.length) * 3.2);
+    if (s.source) meterOut[l.id] = Math.min(1, meterLevel(s.analyser, meterBuf, 2) * METER.gain);
   }
+  const now = performance.now();
+  lowHeld = Math.max(meterLevel(lowAnalyser, lowBuf, 4), lowHeld * Math.exp(-Math.max(0, now - meterAt) / 1000 / METER.lowFall));
+  meterAt = now;
+  meterOut.bass = Math.max(0, Math.min(1, 1 + (20 * Math.log10(lowHeld + 1e-9) - METER.lowTop) / METER.lowRange));
   spectrum ??= new Uint8Array(analyser.frequencyBinCount);
   analyser.getByteFrequencyData(spectrum);
   const band = (a, b) => { let s = 0; for (let i = a; i < b; i++) s += spectrum[i]; return s / (b - a) / 255; };
-  meterOut.bass = band(1, 6); meterOut.mid = band(6, 40); meterOut.high = band(40, 160);
+  meterOut.mid = band(6, 40); meterOut.high = band(40, 160);
   meterOut.spectrum = spectrum;
   if (state.playing) {
     // The visuals follow what is audible now, not what the audio thread is rendering: on

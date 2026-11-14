@@ -20,8 +20,6 @@ an hour, M a few hours, L a day or more. What's done is at the bottom, and in th
   get two stretch workers, no background hq renders, a cheaper limiter and `latencyHint:
   'playback'`, all only tried in Chromium's phone emulation. Time a switch, and listen for
   dropouts while a pick renders.
-- [ ] **A phone over HTTPS.** The limiter only runs on HTTPS or localhost; a phone opening the
-  `-Lan` address over plain HTTP always gets the fallback compressor.
 
 **Loading and downloads**
 
@@ -31,22 +29,14 @@ an hour, M a few hours, L a day or more. What's done is at the bottom, and in th
 - [ ] **Less data on iPhones and Macs (M).** WebKit loads the FLAC stems (about 4.5x the Ogg) to be
   exact to the sample. Once Safari's Ogg decoding is checked on real devices, the length and
   mark check in `exactDecode` could let it use the Ogg when it matches.
-- [ ] **Smaller downloads from the Windows server (L).** Serve FLAC instead of WAV: about 55% of
-  the size, so a stem over the internet takes about half as long. `getOriginal` already treats
-  `.flac` as lossless.
 
 **Needs a UI change (talk to whoever owns the UI)**
 
-- [ ] **Show when a pick will be heard (M).** The engine knows when a swap lands; the layer card
-  could say "Downloading", "Stretching" and "Joins on the next bar" instead of looking like it
-  already plays.
-- [ ] **An auto-tempo switch (S).** Auto tempo re-stretches every layer when a pick moves the
-  average; a lock next to the tempo could keep the tempo you set instead.
 - [ ] **Lossless recording (M).** A WAV option for Rec, taken from the mix with an AudioWorklet.
-- [ ] **Volume sliders that feel even (S).** Map the slider to gain with a taper (`v * v`), so the
-  top half isn't only 6 dB. Changes the default slider position and old share links' levels.
-- [ ] **Steadier meters (S).** Per-layer levels flicker and the bass band misses the kick's low
-  end. The 3D visualizer reads `meters()`, so change it together with whoever tunes the visuals.
+- [ ] **Look at the visuals with the steadier meters (S).** `meters()` no longer flickers and its
+  bass follows the kick, so the kick flash is stronger and sustained layers sit 5-45% higher
+  after the stage's own peak normalising (`normalise` in `js/stage-pyramid.js`). Only measured
+  with the stage's maths, not watched on a real GPU: retune there if anything looks too hot.
 - [ ] **Export extras (S-M).** A 24-bit option, and exporting each layer as its own file.
 
 **Done**
@@ -68,3 +58,11 @@ an hour, M a few hours, L a day or more. What's done is at the bottom, and in th
 - [x] Phase vocoder for held chords and pads, swapped in on a bar (desktops only).
 - [x] Natural voices when the key shifts (formant correction on sung leads).
 - [x] Stutter that follows the tempo (Auto length) and auto tempo from the stems' average.
+- [x] A tempo lock (auto tempo off) in the tempo box, remembered on the device.
+- [x] Volume sliders with a taper (gain = position squared); share links keep storing the gain.
+- [x] Steadier meters: layer levels over 46 ms, bass from the output's 40-120 Hz band.
+- [x] When a pick will be heard: the card and the hub say "Downloading 40%", "Stretching", "Joins on
+  the next bar" and so on until it plays (`pickStatus` / `tempoStatus` in `js/engine.js`), and the
+  tempo box shows the tempo still heard while the mix moves to a new one.
+- [x] Steadier sung leads: fast-path splices placed in steady vowels and silences with every
+  syllable start anchored; the hq render keeps a lead's voiced parts in the vocoder.

@@ -337,6 +337,21 @@ const MIN_GAP_S = 0.060;  // attacks closer than this are one event
 const GUARD_S = 0.020;    // frames after an attack start at least this far past it (no re-struck hits)
 const JUMP_FRAMES = 3, JUMP_NCC = 0.5; // see the frame loop
 
+// Leads choose where each splice goes (see spliceMap and placed()). A fixed frame grid lands a
+// third of a sung lead's splices on consonants, breaths and note changes, where nothing nearby
+// matches, and the 10-25 ms repeated or skipped there is heard as a stutter (a poor match inside
+// a held note: a wobble). So a lead's splices wait for a spot that takes one well (silence, a
+// steady vowel, steady noise), and every syllable start is an anchor, not only the hard hits:
+// rise/level find them like ANCHOR's (far more of them), and tol is how far each may land from
+// its stretched time. None is then played twice or lost, and the frames after one start past it.
+const PLACE = { lead: { rise: 6, level: 40, tol: 0.006 } };
+const PLACE_SOFT_S = 0.008; // a splice is due once the input runs this far off the straight line
+const PLACE_MIN_S = 0.003;  // ... and not worth making before this
+const PLACE_HOP_S = 0.060;  // longest frame while splices are due (large stretches)
+const PLACE_REACH_S = 0.012; // how far from a splice its jump usually reaches
+const PLACE_MARGIN = 0.2;
+const PLACE_STEP = 256, PLACE_TRIES = 4, PLACE_OK = 0.1;
+
 const lens = (sr) => {
   const seqLen = Math.round(SEQ_S * sr), seek = Math.round(SEEK_S * sr);
   const Wd = Math.floor(Math.round(CORR_S * sr) / DEC);
@@ -347,20 +362,25 @@ const tailRoom = (sr) => lens(sr).tail;
 // Attack times (in samples) on the mono sum: 128-sample blocks of first-difference energy
 // (an HF emphasis, so bass swells don't count) that jump `rise` dB over the previous ~23 ms,
 // refined to the first sample of the jump.
-function findOnsets(src, inLen, sr, a) {
+function findOnsets(src, inLen, sr, a, keep = null) {
   const nCh = src.length, B = 128, nb = Math.floor(inLen / B), look = Math.max(2, Math.round(0.023 * sr / B));
   const mono = (i) => { let m = 0; for (let c = 0; c < nCh; c++) m += src[c][(i + inLen) % inLen]; return m; };
-  const E = new Float64Array(nb);
-  let prev = mono(-1), peak = 0;
-  for (let b = 0, i = 0; b < nb; b++) {
-    let e = 0;
-    for (const end = i + B; i < end; i++) {
-      let m = src[0][i];
-      for (let c = 1; c < nCh; c++) m += src[c][i];
-      const d = m - prev; prev = m; e += d * d;
+  // `keep` carries the block energies from one call to the next on the same input (a lead is
+  // searched twice, with ANCHOR's settings and PLACE's).
+  const E = (keep && keep.E) || new Float64Array(nb);
+  let prev = mono(-1), peak = (keep && keep.peak) || 0;
+  if (!keep || !keep.E) {
+    for (let b = 0, i = 0; b < nb; b++) {
+      let e = 0;
+      for (const end = i + B; i < end; i++) {
+        let m = src[0][i];
+        for (let c = 1; c < nCh; c++) m += src[c][i];
+        const d = m - prev; prev = m; e += d * d;
+      }
+      E[b] = e;
+      if (e > peak) peak = e;
     }
-    E[b] = e;
-    if (e > peak) peak = e;
+    if (keep) { keep.E = E; keep.peak = peak; }
   }
   const floor = peak * 10 ** (-a.level / 10), rise = 10 ** (a.rise / 10), gap = MIN_GAP_S * sr;
   const onsets = [];
@@ -383,6 +403,75 @@ function findOnsets(src, inLen, sr, a) {
     if (b >= look) ref -= E[b - look];
   }
   return onsets;
+}
+
+// How well each spot of the input would take a splice, for PLACE. mono: the decimated mono sum
+// (4-sample box sums) of the extended input; back: splices repeat material (a slow-down) rather
+// than skip it. Per 128-sample block: lev, the loudness under a crossfade starting there (0 at
+// 50 dB under the loudest, 1 at the top), and cost. A splice lines up the pitch periods of a
+// steady voiced sound (mismatch: 1 - its periodicity, the best normalised autocorrelation at lags
+// of 2-12.5 ms) and is not heard in steady noise either (an 's', a breath: low periodicity and a
+// level that holds), so what costs is loud material that is neither, anywhere under the
+// crossfade (note changes, consonant bursts, half-voiced transitions), and a jump in level in
+// what the splice would repeat or skip (a syllable starting or ending: played twice it stutters).
+// Best normalised autocorrelation of d[x0, x0 + W) at lags L0..L1: near 1 for a steady voiced
+// sound, low for noise and for sound that changes under the window.
+function periodicity(d, x0, W, L0, L1) {
+  let e0 = 0, eL = 0, per = 0;
+  for (let j = 0; j < W; j++) { const v = d[x0 + j], u = d[x0 + L0 + j]; e0 += v * v; eL += u * u; }
+  for (let L = L0; L <= L1; L++) {
+    if (L > L0) { const u = d[x0 + L - 1], v = d[x0 + L + W - 1]; eL += v * v - u * u; }
+    let c = 0;
+    for (let j = 0; j < W; j++) c += d[x0 + j] * d[x0 + L + j];
+    const r = c / (Math.sqrt(e0 * Math.max(eL, 0)) + 1e-12);
+    if (r > per) { per = r; if (r > 0.9) break; } // periodic enough: the rest could only find it again
+  }
+  return per;
+}
+
+function spliceMap(mono, sr, back, E, peakE) {
+  const B = 128, q = B / DEC, nb = Math.floor(mono.length / q), P = 4; // periodicity every P blocks
+  const e = new Float64Array(nb + 8), l0 = new Float32Array(nb), mis = new Float32Array(nb), jump = new Float32Array(nb);
+  const lev = new Float32Array(nb), cost = new Float32Array(nb);
+  let peak = 0;
+  for (let b = 0, i = 0; b < nb; b++) { let s = 0; for (const end = i + q; i < end; i++) s += mono[i] * mono[i]; e[b + 4] = s; }
+  for (let b = 0; b < nb; b++) { const s = e[b + 3] + e[b + 4] + e[b + 5] + e[b + 6]; if (s > peak) peak = s; }
+  if (!(peak > 0)) return { B, lev, cost };
+  // Every other decimated sample pair (5.5 kHz): plenty to tell a vowel from a consonant.
+  const n8 = mono.length >> 1, d8 = new Float32Array(n8);
+  for (let i = 0; i < n8; i++) d8[i] = mono[2 * i] + mono[2 * i + 1];
+  const W = Math.round((0.023 * sr) / (2 * DEC)), L0 = Math.round((0.002 * sr) / (2 * DEC)), L1 = Math.round((0.0125 * sr) / (2 * DEC));
+  const step = (P * q) >> 1, floor = peak * 1e-5, nE = E.length, floorE = peakE * 1e-4;
+  const hf = (k) => E[((k % nE) + nE) % nE];
+  for (let b = 0; b < nb; b += P) {
+    const loud = e[b + 3] + e[b + 4] + e[b + 5] + e[b + 6] + e[b + 7];
+    let per = 0;
+    if (loud > floor) {
+      per = periodicity(d8, Math.max(0, Math.min(n8 - W - L1 - 1, (b / P) * step + (step >> 1) - ((W + L1) >> 1))), W, L0, L1);
+    }
+    const noisy = Math.min(1, Math.max(0, (0.5 - per) / 0.3));
+    for (let k = b; k < Math.min(nb, b + P); k++) {
+      const now = e[k + 3] + e[k + 4] + e[k + 5] + e[k + 6];
+      const l = Math.min(1, Math.max(0, 1 + Math.log10(now / peak + 1e-12) / 5));
+      // Level change across the block, in dB: steady noise is 0, a burst or a cut-off 6 or more.
+      const after = e[k + 4] + e[k + 5] + e[k + 6] + e[k + 7], before = e[k] + e[k + 1] + e[k + 2] + e[k + 3];
+      const dB = Math.abs(10 * Math.log10((after + floor) / (before + floor)));
+      // The same in the attack finder's high-passed energy: a consonant over a held vowel barely moves the level.
+      const dBh = Math.abs(10 * Math.log10((hf(k) + hf(k + 1) + hf(k + 2) + hf(k + 3) + floorE) / (hf(k - 4) + hf(k - 3) + hf(k - 2) + hf(k - 1) + floorE)));
+      l0[k] = l;
+      mis[k] = l * (1 - Math.min(1, per)) * (1 - noisy * (1 - Math.min(1, dB / 6)));
+      jump[k] = Math.min(1, Math.max(0, 1 + Math.log10(Math.max(after, before) / peak + 1e-12) / 5)) * Math.min(1, Math.max(0, (Math.max(dB, dBh) - 2) / 6));
+    }
+  }
+  // A crossfade starting in block k runs to block k + S; the jump reaches R blocks before it (back) or after.
+  const S = Math.ceil(Math.round(OVL_S * sr) / B), R = Math.ceil((PLACE_REACH_S * sr) / B);
+  for (let k = 0; k < nb; k++) {
+    let m = 0, l = 0, j = 0;
+    for (let i = k, end = Math.min(nb - 1, k + S); i <= end; i++) { if (mis[i] > m) m = mis[i]; if (l0[i] > l) l = l0[i]; }
+    for (let i = Math.max(0, back ? k - R : k), end = Math.min(nb - 1, back ? k + S : k + S + R); i <= end; i++) if (jump[i] > j) j = jump[i];
+    lev[k] = l; cost[k] = m + j;
+  }
+  return { B, lev, cost };
 }
 
 // chans: the loop in [0, inLen) (16-bit values when scale != 1); returns targetLen samples per
@@ -425,6 +514,7 @@ function timeStretch(chans, inLen, targetLen, sampleRate, type, scale = 1, onset
   for (let i = 0; i < monoLen; i++) mono[i] = box(i * DEC);
 
   const refA = new Float64Array(Wd), refB = new Float64Array(Wd), atHop = new Float64Array(Math.ceil(2 * seek / DEC) + Wd + 2);
+  const refF = new Float64Array(Math.round(OVL_S * sampleRate));
   const ncc = (corr, e1, e2) => corr / (Math.sqrt(e1 * e2) + 1e-12);
   // Similarity with a mild pull toward the nominal position (SoundTouch's
   // heuristic). It keeps layers tight and makes silence, where every candidate
@@ -468,13 +558,13 @@ function timeStretch(chans, inLen, targetLen, sampleRate, type, scale = 1, onset
 
     // Fine: full-rate refinement within one grid step, over the crossfade span.
     let e1 = 0, e1b = 0;
-    for (let j = 0; j < ovl; j++) { const r = full(nat + j); e1 += r * r; }
+    for (let j = 0; j < ovl; j++) { const r = full(nat + j); refF[j] = r; e1 += r * r; }
     if (closing) for (let j = 0; j < ovl; j++) { const r = full(closeAt + j); e1b += r * r; }
     let fine = best, fineScore = -Infinity;
     const fLo = Math.max(lo, best - DEC + 1), fHi = Math.min(hi, best + DEC - 1);
     for (let b = fLo; b <= fHi; b++) {
       let corr = 0, e2 = 0;
-      for (let j = 0; j < ovl; j++) { const v = full(b + j); corr += full(nat + j) * v; e2 += v * v; }
+      for (let j = 0; j < ovl; j++) { const v = full(b + j); corr += refF[j] * v; e2 += v * v; }
       const s1 = ncc(corr, e1, e2);
       let sim = s1;
       if (closing) {
@@ -512,23 +602,135 @@ function timeStretch(chans, inLen, targetLen, sampleRate, type, scale = 1, onset
   // samples ahead of it, so the splice into it is over before the hit even when the anchor
   // moves by its tolerance. Each attack then plays verbatim from its anchor: it lands on the
   // beat and is neither doubled nor dropped. The frames between anchors are searched.
-  const cfg = ANCHOR[type] || ANCHOR.groove;
+  // An anchor is [input, output, tolerance, lead-in, hard]; a lead's syllable starts (PLACE) join
+  // the hard attacks, with their own tolerance, where no hard attack is within MIN_GAP_S.
+  const cfg = ANCHOR[type] || ANCHOR.groove, plc = PLACE[type], keep = plc ? {} : null;
   const tol = Math.round(cfg.tol * sampleRate), pre = ovl + tol + 32, minGap = 2 * ovl;
-  const anchors = [[0, 0]];
-  for (const t of onsets || findOnsets(src, inLen, sampleRate, cfg)) {
-    const aIn = t - pre, aOut = Math.round(t * stretch) - pre, [pIn, pOut] = anchors[anchors.length - 1];
-    if (aIn - pIn >= minGap + tol && aOut - pOut >= minGap && closeRef - aIn >= minGap + tol && span - aOut >= minGap) {
-      anchors.push([aIn, aOut]);
-      if (pinned) pinned.push(t);
+  const anchors = [[0, 0, tol, pre, true]];
+  const hits = (onsets || findOnsets(src, inLen, sampleRate, cfg, keep)).map((t) => [t, tol, true]);
+  if (plc) {
+    const gap = MIN_GAP_S * sampleRate, tolS = Math.round(plc.tol * sampleRate), hard = hits.length;
+    for (const t of findOnsets(src, inLen, sampleRate, plc, keep)) {
+      let near = false;
+      for (let i = 0; i < hard && !near; i++) near = Math.abs(hits[i][0] - t) < gap;
+      if (!near) hits.push([t, tolS, false]);
+    }
+    hits.sort((x, y) => x[0] - y[0]);
+  }
+  for (const [t, tolA, hard] of hits) {
+    const preA = ovl + tolA + 32, aIn = t - preA, aOut = Math.round(t * stretch) - preA, [pIn, pOut] = anchors[anchors.length - 1];
+    if (aIn - pIn >= minGap + tolA && aOut - pOut >= minGap && closeRef - aIn >= minGap + tolA && span - aOut >= minGap) {
+      anchors.push([aIn, aOut, tolA, preA, hard]);
+      if (pinned && hard) pinned.push(t);
     }
   }
-  anchors.push([closeRef, span]);
+  anchors.push([closeRef, span, 0, 0, true]);
 
   const out = [];
   for (let c = 0; c < nCh; c++) out.push(new Float32Array(targetLen));
   const guard = Math.round(GUARD_S * sampleRate);
   let start = 0, prevStart = 0, prevHop = 0;
+  // One frame: `hop` samples (and the crossfade's worth after them) from `start`, faded in over
+  // what the frame before left at p0.
+  const emit = (p0, hop) => {
+    for (let c = 0; c < nCh; c++) {
+      const o = out[c], s = src[c];
+      let j = 0;
+      if (p0 > 0) {
+        if (c === 0) setFade(rho);
+        for (; j < ovl; j++) o[p0 + j] = o[p0 + j] * fOut[j] + s[start + j] * fIn[j];
+      }
+      for (; j < hop + ovl; j++) o[p0 + j] = s[start + j]; // the last frame ends exactly at targetLen
+    }
+    prevStart = start; prevHop = hop;
+  };
+
+  // The frames from anchor a to the next, for PLACE. Where the input reads from runs ahead of (or
+  // behind) the straight line between the two anchors by `drift` per sample played, and a splice
+  // takes that back. Each frame plays on until the best spot for the next splice: of the cheapest
+  // few on the map before the input is PLACE_SOFT_S off the line (large stretches: within
+  // PLACE_HOP_S), the first that takes one well, searched around the line as on the grid. Once
+  // what is left to take back is small, one splice steps onto the next anchor's own timeline and
+  // the rest is a plain run into the attack, which then needs no splice of its own.
+  const map = plc ? spliceMap(mono, sampleRate, stretch > 1, keep.E, keep.peak) : null;
+  const softN = PLACE_SOFT_S * sampleRate, minN = PLACE_MIN_S * sampleRate, maxHop = Math.round(PLACE_HOP_S * sampleRate);
+  const pull = Math.round(1.5 * softN), reach = Math.min(seek, Math.round(2 * softN)), candH = new Int32Array(PLACE_TRIES), candC = new Float32Array(PLACE_TRIES);
+  function placed(a) {
+    const [inA, outA, tolA, preA, hardA] = anchors[a], [inB, outB, tolNext, , hardB] = anchors[a + 1];
+    const rate = (inB - inA) / (outB - outA), drift = 1 - rate, sg = drift < 0 ? -1 : 1, ad = Math.abs(drift);
+    const tolB = exact && hardB ? 0 : tolNext; // how far off the next anchor may be met (the loop end: exactly)
+    const floorIn = inA + preA + guard, cost = map.cost, lev = map.lev, B = map.B;
+    const at = (nat) => Math.min(cost.length - 1, (nat / B) | 0);
+    const lin = (p) => inA + (p - outA) * rate;
+    const nat0 = prevStart + prevHop;
+    if (a === 0) start = 0; // the loop start plays verbatim
+    else if (exact && hardA) { start = inA; rho = simAt(nat0, inA); }
+    else if (Math.abs(nat0 - inA) <= tolA) { start = nat0; rho = 1; } // already in step with the attack: no splice
+    else start = search(inA, nat0, 0, -1, inA - tolA, inA + tolA, Math.max(1, tolA));
+    let last = false;
+    for (let p = outA; ;) {
+      const rem = outB - p, J = inB - rem - start, r0 = rho; // J: the jump that would put this frame on the next anchor's timeline
+      // No splice before the attack just played has rung out, or once the next one's lead-in is reached.
+      const hFirst = Math.max(minGap, floorIn - start), hLast = Math.min(rem - minGap, inB - start);
+      let hop = rem, next = 0, nextRho = 1;
+      if (!last && Math.abs(J) > tolB && hFirst <= hLast) {
+        const d0 = sg * (start - lin(p)); // how far off the line, in the drift's direction
+        const onto = Math.abs(J) <= (rem <= 3 * hopN ? seek : 2 * softN) && Math.max(hFirst, floorIn - start - J) <= hLast;
+        // Where the splice may go: onto the anchor's timeline anywhere from here on (but not
+        // landing on the attack just played); otherwise before the input is too far off the
+        // line, and leaving room for another splice after it.
+        let h0 = hFirst, h1 = hLast;
+        if (onto) h0 = Math.max(hFirst, floorIn - start - J);
+        else h1 = Math.min(hLast, Math.max(hFirst, Math.min((0.9 * seek - d0) / ad, Math.max((softN - d0) / ad, maxHop)))); // ad > 0, or J would be within tolB
+        const room = onto || rem - h0 >= 2 * minGap;
+        if (room && !onto) h1 = Math.max(h0, Math.min(h1, rem - 2 * minGap));
+        // The cheapest few spots (the later of equals: fewer splices), cheapest first. A splice
+        // made before the input is PLACE_MIN_S off the line is hardly worth its risk.
+        let n = 0;
+        for (let h = h1; h >= h0; h -= PLACE_STEP) {
+          const c = cost[at(start + h)] + (onto ? 0 : 0.3 * Math.max(0, 1 - (d0 + ad * h) / minN));
+          if (n === PLACE_TRIES && c >= candC[n - 1]) continue;
+          let i = n < PLACE_TRIES ? n++ : n - 1;
+          for (; i > 0 && candC[i - 1] > c; i--) { candC[i] = candC[i - 1]; candH[i] = candH[i - 1]; }
+          candC[i] = c; candH[i] = h;
+        }
+        if (!room) {
+          // The last frame before the anchor: searched to match both what came before and the
+          // anchor one hop later, as on the grid.
+          hop = candH[0];
+          const hopK = rem - hop, nominal = lin(p + hop), hi = Math.min(Math.round(nominal + seek), inB - hopK);
+          const lo = Math.max(0, Math.min(hi, Math.max(floorIn, Math.round(nominal - seek))));
+          next = search(nominal, start + hop, hopK, inB, lo, Math.max(lo, hi), seek); nextRho = rho; last = true;
+        } else {
+          let best = Infinity;
+          for (let i = 0; i < n && best > PLACE_OK && candC[i] <= candC[0] + PLACE_MARGIN; i++) {
+            const h = candH[i], nat = start + h, al = nat + J;
+            let s;
+            if (!lev[at(nat)] && !lev[at(onto ? al : lin(p + h))]) { s = Math.max(floorIn, Math.round(onto ? al : lin(p + h))); rho = 1; } // silence to silence: nothing to match
+            else if (onto) s = search(al, nat, 0, -1, Math.max(floorIn, al - tolB), Math.max(floorIn, al + tolB), Math.max(1, tolB));
+            else {
+              // Within reach of the line, and never past the anchor's timeline (the next splice
+              // could not come back from there).
+              const nominal = lin(p + h);
+              let lo = Math.max(floorIn, Math.round(nominal - reach)), hi = Math.min(inB - minGap, Math.round(nominal + reach));
+              if (sg > 0) lo = Math.max(lo, al); else hi = Math.min(hi, al);
+              s = search(nominal, nat, 0, -1, lo, Math.max(lo, hi), pull);
+            }
+            const bad = lev[at(nat)] * (1 - rho);
+            if (bad < best) { best = bad; hop = h; next = s; nextRho = rho; }
+          }
+        }
+      }
+      rho = r0;
+      emit(p, hop);
+      p += hop;
+      if (p >= outB) return;
+      start = next; rho = nextRho;
+    }
+  }
+
   for (let a = 0; a + 1 < anchors.length; a++) {
+    if (map) { placed(a); continue; }
     const [inA, outA] = anchors[a], [inB, outB] = anchors[a + 1];
     const G = outB - outA, gin = inB - inA;
     // Enough frames that none is much longer than a normal hop and the anchor frame never
@@ -564,16 +766,7 @@ function timeStretch(chans, inLen, targetLen, sampleRate, type, scale = 1, onset
           start = search(nominal, nat, hopK, i === m - 1 ? inB : -1, lo, Math.max(lo, hi), seek);
         }
       }
-      for (let c = 0; c < nCh; c++) {
-        const o = out[c], s = src[c];
-        let j = 0;
-        if (p0 > 0) {
-          if (c === 0) setFade(rho);
-          for (; j < ovl; j++) o[p0 + j] = o[p0 + j] * fOut[j] + s[start + j] * fIn[j];
-        }
-        for (; j < hopK + ovl; j++) o[p0 + j] = s[start + j]; // the last frame ends exactly at targetLen
-      }
-      prevStart = start; prevHop = hopK;
+      emit(p0, hopK);
     }
   }
   // Close the loop into the pre-roll; out[targetLen - 1] then leads into src[0] == out[0].
@@ -857,10 +1050,39 @@ function replaceSorted(arr, base, K, old, v) {
 const PV_LOW_HZ = 300, pvSize = (low, type) => (low > 0.5 && type !== 'all' ? 8192 : 4096);
 const PV_CLOSE_S = 1.5; // the vocoder's phases are steered back into step with the loop start over this long
 
+// Leads: the split calls much of a voice percussive (sung notes shorter than its ~400 ms median,
+// vibrato, glides), and that share goes through WSOLA while the rest goes through the vocoder: two
+// renders of one voice, a few ms apart, summed, and they beat. Measured on sung leads at x1.05:
+// 1.4 dB of level and 16 cents of pitch modulation at 3-10 Hz, against 0.3 dB and 5 cents with the
+// voice in the vocoder alone. So where a lead is voiced (periodic), its percussive part is folded
+// back into the harmonic one; consonants, breaths and unvoiced attacks stay percussive.
+const FOLD = { lead: true }, FOLD_HOP = 512;
+function voicing(x, n, sr) {
+  const D = 2 * DEC, W = Math.round((0.023 * sr) / D), L0 = Math.round((0.002 * sr) / D), L1 = Math.round((0.0125 * sr) / D);
+  const hd = FOLD_HOP / D, nk = Math.ceil(n / FOLD_HOP), pad = (W + L1) >> 1, len = Math.ceil(n / D) + 2 * pad + W + L1;
+  const d = new Float32Array(len), g = new Float32Array(nk + 1);
+  for (let i = 0; i < len; i++) {
+    let s = 0;
+    for (let j = (i - pad) * D, k = 0; k < D; k++) { const t = (((j + k) % n) + n) % n; for (const c of x) s += c[t]; }
+    d[i] = s;
+  }
+  // Fully voiced at 0.7 and up, not at all at 0.4 and below (noise, consonants).
+  for (let k = 0; k < nk; k++) g[k] = Math.min(1, Math.max(0, (periodicity(d, k * hd, W, L0, L1) - 0.4) / 0.3));
+  g[nk] = g[0];
+  return g;
+}
+function fold(h, p, n, g) {
+  for (let c = 0; c < h.length; c++) {
+    const a = h[c], b = p[c];
+    for (let i = 0; i < n; i++) { const u = i / FOLD_HOP, k = u | 0, v = (g[k] + (g[k + 1] - g[k]) * (u - k)) * b[i]; a[i] += v; b[i] -= v; }
+  }
+}
+
 function hqStretch(x, n, targetLen, sr, type, ratio) {
   if (ratio !== 1) x = formantPass(x, n, sr, ratio, 0);
-  const onsets = findOnsets(x, n, sr, ANCHOR[type] || ANCHOR.groove);
+  const onsets = findOnsets(x, n, sr, ANCHOR[type] || ANCHOR.groove), voiced = FOLD[type] ? voicing(x, n, sr) : null;
   let { h, p, low } = splitPass(x, n, sr, tailRoom(sr));
+  if (voiced) fold(h, p, n, voiced);
   x = null;
   const want = blockEnergy(h, p, n, Math.max(1, Math.round(targetLen / (LEVEL_S * sr))), targetLen / n);
   const pinned = [], out = timeStretch(p, n, targetLen, sr, type, 1, onsets, true, pinned);

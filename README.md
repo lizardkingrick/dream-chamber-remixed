@@ -58,7 +58,7 @@ The keyboard layout follows The Daft Punk Experience on PC.
 | Pick a song | Hold the mouse button, drag through the songs and let go (or just click). Or `←` `→` then `Enter` |
 | Next layer | `Space`. `1` `2` `3` jump to Groove, Lead or Extra |
 | Audio FX | Choose one in the FX strip (or `Q` / `E`), then hold `F` or the FX button |
-| Tempo | `Z` / `C`, or the pill buttons |
+| Tempo | `Z` / `C`, or the pill buttons. `X` or the padlock locks it, so picks keep your tempo |
 | Albums | `A` / `D`, or the album tiles |
 | Jam mode | **Enter Jam** (top left) or click empty space. This hides the cursor so small mouse flicks steer the wheel. `Tab` exits |
 | Play / random mix | `P` / `R` |
@@ -81,29 +81,25 @@ On a phone or tablet, tap or drag on the wheel, and press and hold **FX** for ef
 
 ## Run it yourself
 
-The code is here, but the audio is not.
+The code is here, but the audio is not. The live site is hosted on Cloudflare; on your own
+computer the app runs from a small Node server.
 
 **To work on the code with no stems**, you need only [Node.js](https://nodejs.org) 18+. This
-streams the audio from the live site and saves nothing to disk:
+serves your copy of the code, streams the audio from the live site and saves nothing to disk:
 
 ```bash
-node tools/serve-live.mjs     # http://localhost:8138/
+npm run dev:live  # http://localhost:8138/
 ```
 
-**With your own copy of the stems on Windows, nothing to install:** double-click **`start.cmd`**. It finds a `Stems` folder next to
-the app (or up to three folders above it), starts a local server and opens your browser. The
-WAV files play straight from disk.
-
-**With Node.js 18+ and ffmpeg:**
+**With your own copy of the stems**, you also need [ffmpeg](https://ffmpeg.org):
 
 ```bash
-npm install
 npm run stems     # converts the WAV stems to Ogg and FLAC and writes stems.json
-npm run dev       # http://localhost:8137/webapp/
+npm run dev       # http://localhost:8137/
 ```
 
-[docs/self-hosting.md](docs/self-hosting.md) covers stem file naming, album covers, LAN mode for
-phones and publishing behind a reverse proxy.
+[docs/self-hosting.md](docs/self-hosting.md) covers stem file naming, album covers and putting
+your own copy on Cloudflare.
 
 ## Contributing
 

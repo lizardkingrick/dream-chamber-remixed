@@ -22,7 +22,6 @@ const ALBUM_FOR = {
   randomaccessmemories: 'ram',
   starboy: 'weeknd',
   weeknd: 'weeknd',
-  instrumentguns: 'guns',
 };
 
 mkdirSync(OUT, { recursive: true });

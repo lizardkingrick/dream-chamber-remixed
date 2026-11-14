@@ -12,7 +12,7 @@
   FLAC stems are checked against their known length too
 - FX transitions: songs picked while an Audio FX is held (Random too) wait, with the old songs
   playing on under the effect, and all drop in the moment it's let go, in time. A waiting pick
-  pulses on the wheel and its card says "Drops when you let go of FX"; picking it again takes it
+  pulses on the wheel and its card says "Drops on FX release"; picking it again takes it
   back. A pick still downloading at the release lands on the next bar once it's ready
 - Every effect has two settings, set for the chosen effect under the effects (on phones, the
   tune button at the end of the effects row opens them): Stutter's length (1/4 to 1/32) and gate,
@@ -50,6 +50,50 @@
   over is stretched ahead so it's ready at once, and a reload or share link plays the last mix in
   about 0.15 s, as its stretched stems are kept in the browser. Stems take half the memory, and
   their loudness is measured when they're built instead of in the browser
+- The Windows local server is gone: `start.cmd`, `tools/serve.ps1` (with its LAN, public and
+  proxy modes) and `tools/allow-lan.ps1`. The site is hosted on Cloudflare only, so the page no
+  longer asks for a folder listing on every visit (a 404 in the console on the hosted site), and
+  the Instrument Guns page, which only that server could fill, is removed. To work on the code,
+  `npm run dev:live` streams the stems from the live site, and `npm run dev` (after
+  `npm run stems`) now serves the repo folder itself at `http://localhost:8137/`
+- A tempo lock: the padlock in the tempo box (or X) switches auto tempo off, so picks, Random and
+  clearing a layer leave the tempo where you set it. Unlocking moves the tempo to the average of
+  the mix at once, or, while a pick is still loading, with that pick as it lands (the song it
+  replaces plays on till then). The lock is remembered on the device, and a share link still
+  opens at its own tempo. A page that opens locked with no tempo set yet takes the first pick's
+  own tempo and holds that once it's heard: a first pick that fails to load gives the tempo
+  back. A song you hover over is stretched ahead at the tempo the pick will really have
+- Volume sliders feel even: a slider's position squared is its gain, so the top half of the
+  travel covers 12 dB instead of 6 and the rest fades out smoothly instead of all in the last
+  tenth. The default loudness is the same (the knobs sit a little further right). Share links
+  still store the gain, now to two decimals, so old links sound as they did and new ones come
+  back exactly
+- Share links: every layer's volume and mute reach the sound on load. Before, only the first
+  layer's did until a slider or mute button was touched
+- Steadier visuals: each layer's level is measured over 46 ms instead of 6, so it no longer
+  jumps from frame to frame on a steady groove, and the bass band is the output's real
+  40-120 Hz band, so it rises on every kick instead of barely moving
+- You can see when a pick will be heard. The old song plays on until the new one has downloaded,
+  been stretched and reached its bar line, and the layer card and the hub now say so: "Downloading
+  40%", "Stretching", "Waits for the others" (Random), "Drops on FX release", "Joins at the new
+  tempo", "Joins on the next bar" (with the card's thin bar running down to it), and only then
+  "Playing". Meanwhile the new name is dimmed, the wheel's slice pulses, the card's icon doesn't
+  beat yet, and the hub says which song is still heard. A pick that's ready within a moment (a
+  song stretched while you hovered over it) goes straight to playing, without flicker. The hub
+  says it in shorter words ("Loading 40%", "At new tempo", "On next bar") on one line, and a card
+  too narrow for its words (a phone 320 px wide) uses them too. On phones held upright a pick
+  into a silent layer says it where the card's volume slider sits, until the pick is heard; a
+  layer whose old song plays on keeps its slider. While the
+  mix moves to a new tempo, the tempo box shows the new tempo dimmed with "Now 116 BPM" (the tempo
+  still heard) under it until it lands. For other front ends, the engine reports all this as
+  `pickStatus(layer)` and `tempoStatus()`, with a 'change' event as each pick lands
+- Steadier sung leads. On phones (and a desktop's first render) a lead's stretch splices now fall
+  in steady vowels, silences and steady noise instead of every 40 ms, and every syllable start is
+  kept in place, so no syllable is doubled or dropped: at +3 semitones a fifth to two fifths of
+  them were. On desktops the hq render keeps a lead's voiced parts in the phase vocoder instead of
+  splitting the voice between two stretchers that beat against each other, which was the wobble
+  (its pitch and level flutter drop to a third or less). Grooves, Extras and full mixes render
+  exactly as before. Lead renders kept in the browser from before are rendered again
 
 ## 1.2.0-beta (2026-11-06)
 

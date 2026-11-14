@@ -19,11 +19,12 @@ You need [Node.js](https://nodejs.org) 18 or newer. Nothing else is required to 
 ```bash
 git clone https://github.com/lizardkingrick/dream-chamber-remixed.git
 cd dream-chamber-remixed
-node tools/serve-live.mjs     # http://localhost:8138/
+npm run dev:live              # http://localhost:8138/
 ```
 
-`serve-live.mjs` serves your working copy and streams the stems and covers from the live site,
-so you can work on the code without the audio files. To run with your own stems instead, see
+It runs `tools/serve-live.mjs`, which serves your working copy and streams the stems and covers
+from the live site, so you can work on the code without the audio files. To run with your own
+stems instead (`npm run stems`, then `npm run dev`), see
 [docs/self-hosting.md](docs/self-hosting.md).
 
 There's no build step. The app is plain HTML, CSS and ES modules, so you edit a file and reload
@@ -57,9 +58,8 @@ and needs no audio.
 | `solid.css` | The look on top of `style.css`: colours, type and shapes (grey surfaces, the layer colours, Geist). It changes no sizes |
 | `js/engine.js` | Audio graph, stem loading and conforming, transport, FX, record and export |
 | `js/stretch-worker.js` | WSOLA time-stretch and pitch-shift (MuscularCrab), with drum hits pinned to the beat |
-| `js/loudness.js` | Measures each stem's integrated loudness (BS.1770) for the level trims |
+| `js/loudness.js` | Integrated loudness (BS.1770). `tools/build-stems.mjs` measures each stem with it for the level trims |
 | `js/limiter-worklet.js` | The look-ahead true-peak limiter at the end of the mix |
-| `js/manifest.js` | Song catalogue; builds the song list from a local folder listing |
 | `js/wheel.js` | SVG radial song wheel |
 | `js/stage.js` | Picks the background: the pyramid stage, or a starfield fallback (the stage contract is documented at the top) |
 | `js/stage-pyramid.js` | The pyramid stage: Three.js scene, shaders, cue sequencer, camera shots, post-processing |
@@ -68,14 +68,12 @@ and needs no audio.
 | `js/catalog.js` | Album pages, album badge art, layer icons |
 | `js/main.js` | UI wiring, keyboard and pointer input, share links |
 | `js/version.js` | App version |
-| `tools/build-stems.mjs` | WAV → Ogg and FLAC copies, and the `stems.json` manifest (with loudness) |
+| `tools/build-stems.mjs` | Song catalogue; WAV → Ogg and FLAC copies, and the `stems.json` song list (with loudness) |
 | `tools/deploy.mjs` | Builds `dist/` and deploys it with Wrangler |
 | `wrangler.jsonc` | Cloudflare config: Worker name, assets folder, custom domain |
-| `serve.mjs` | Zero-dependency local dev server (Node) |
+| `serve.mjs` | Zero-dependency local dev server (Node), for a checkout with its own built stems |
 | `tools/serve-live.mjs` | Local dev server that streams the stems and covers from the live site |
 | `tools/stage-lab.html` | Stage preview driven by a simulated song (no audio needed) |
-| `start.cmd`, `tools/serve.ps1` | Windows local server: no installs, plays the WAVs straight from your folders |
-| `tools/allow-lan.ps1` | One-time admin setup for `start.cmd -Lan` / `-Public` (port reservation + firewall rule) |
 | `_headers` | Cache rules for the hosted site |
 
 ## License

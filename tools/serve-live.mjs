@@ -1,6 +1,7 @@
-// Local server for working on the app without the stems on this machine: serves this folder and
-// streams the stems and covers from the live site. Nothing is saved to disk.
-// Usage:  node tools/serve-live.mjs [port]
+// Local server for working on the app without the stems on this machine: serves this folder
+// (the song list is its stems.json) and streams the stems and covers from the live site. Nothing
+// is saved to disk.
+// Usage:  npm run dev:live [-- <port>]      (or: node tools/serve-live.mjs [port])
 import { createServer } from 'node:http';
 import { createReadStream, statSync } from 'node:fs';
 import { join, normalize, extname, dirname, resolve } from 'node:path';
